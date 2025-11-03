@@ -22,7 +22,7 @@ test/%.jit: test/%.snek src/main.rs
 
 # Both JIT execute and generate assembly (debugging)
 test/%.debug: test/%.snek src/main.rs
-	cargo run --target x86_64-apple-darwin -- -g $< test/$*.s
+	cargo run --target x86_64-apple-darwin -- -g $< 
 
 clean:
 	rm -f test/*.s test/*.run runtime/*.o runtime/*.a

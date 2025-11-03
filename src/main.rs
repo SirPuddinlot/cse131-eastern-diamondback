@@ -93,8 +93,8 @@ fn main() -> std::io::Result<()> {
             
             let input = parse_input(input_str);
             
-            // eprintln!("Input string: {}", input_str);
-            // eprintln!("Input value (tagged): {:#018b} = {}", input, input);
+            eprintln!("Input string: {}", input_str);
+            eprintln!("Input value (tagged): {:#018b} = {}", input, input);
             if input & 1 == 0 {
                 eprintln!("  Represents number: {}", input >> 1);
             }

@@ -28,9 +28,9 @@ pub enum Expr {
     UnOp(Op1, Box<Expr>),
     BinOp(Op2, Box<Expr>, Box<Expr>),
     Boolean(bool),
-    If(Box<Expr>, Box<Expr>, Box<Expr>),  // NEW
-    Block(Vec<Expr>),  // NEW for later
-    Set(String, Box<Expr>),  // NEW for later
+    If(Box<Expr>, Box<Expr>, Box<Expr>),  
+    Block(Vec<Expr>),  
+    Set(String, Box<Expr>),  
     Loop(Box<Expr>),    
     Break(Box<Expr>),   
 }

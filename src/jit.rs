@@ -10,12 +10,12 @@ use std::collections::HashMap as StdHashMap;
 pub fn compile_to_jit(e: &Expr, ops: &mut Assembler, defines: &mut HashMap<String, i32>) {
     let instrs = compile_to_instrs(e, -8, &HashMap::new(), defines, true, &None);
 
-    // // DEBUG: Print all instructions that will be JIT compiled
-    // eprintln!("=== JIT Instructions ===");
-    // for instr in &instrs {
-    //     eprintln!("{}", crate::instr::instr_to_str(instr));
-    // }
-    // eprintln!("========================\n");
+    // DEBUG: Print all instructions that will be JIT compiled
+    eprintln!("=== JIT Instructions ===");
+    for instr in &instrs {
+        eprintln!("{}", crate::instr::instr_to_str(instr));
+    }
+    eprintln!("========================\n");
     
     // Create a map of label names to dynamic labels
     let mut label_map: StdHashMap<String, dynasmrt::DynamicLabel> = StdHashMap::new();
@@ -119,6 +119,7 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                         ; mov [rsp - pos_offset], rax
                     );
                 }
+                
                 _ => panic!("Unsupported mov pattern in JIT: {:?} <- {:?}", dest, src),
             }
         }
@@ -219,6 +220,13 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                     dynasm!(ops
                         ; .arch x64
                         ; cmp rcx, rax
+                    );
+                }
+                (Val::Reg(Reg::RAX), Val::RegOffset(Reg::RSP, offset)) => {
+                    let pos_offset = -offset;
+                    dynasm!(ops
+                        ; .arch x64
+                        ; cmp rax, [rsp - pos_offset]
                     );
                 }
                 _ => panic!("Unsupported cmp pattern in JIT: {:?} cmp {:?}", dest, src),

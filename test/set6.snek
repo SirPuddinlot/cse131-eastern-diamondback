@@ -1,0 +1,4 @@
+(block
+  (set! x 5)      ; This should FAIL - x not defined!
+  (set! y 10)     ; This should FAIL - y not defined!
+  (+ x y))
