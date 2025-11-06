@@ -15,10 +15,9 @@ test/%.run: test/%.s runtime/start.rs
 	ar rcs runtime/libour_code.a runtime/our_code.o
 	rustc --target x86_64-apple-darwin -L runtime/ runtime/start.rs -o test/$*.run
 
-ARG ?= 
 # JIT execute only (no assembly file generated)
 test/%.jit: test/%.snek src/main.rs
-	cargo run --target x86_64-apple-darwin -- -e test/$*.snek $(ARG)
+	cargo run --target x86_64-apple-darwin -- -e test/$*.snek $(filter-out $@,$(MAKECMDGOALS))
 
 # Both JIT execute and generate assembly (debugging)
 test/%.debug: test/%.snek src/main.rs

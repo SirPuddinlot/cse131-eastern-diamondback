@@ -1,0 +1,8 @@
+(
+(fun (iseven n)
+    2
+)
+
+
+(print (iseven input))
+)

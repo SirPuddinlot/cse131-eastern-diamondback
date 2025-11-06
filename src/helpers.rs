@@ -27,17 +27,11 @@ pub fn parse_input(input: &str) -> i64 {
 
 pub fn print_result(val: i64) {
     if val & 1 == 1 {
-        if val == TRUE_VAL {
+        if val == 1 {              // TRUE = 1
             println!("true");
-        } 
-        else if val == FALSE_VAL {
+        } else if val == 3 {       // FALSE = 3
             println!("false");
-        } 
-        // else if REPL.load(Ordering::SeqCst) {
-        //     // println!("{}", REPL.load(Ordering::SeqCst));
-        //     eprintln!("Invalid boolean value: {}", val);
-        // }
-        else {
+        } else {
             eprintln!("Invalid boolean value: {}", val);
             std::process::exit(1);
         }
@@ -45,7 +39,6 @@ pub fn print_result(val: i64) {
         println!("{}", val >> 1);
     }
 }
-
 // Export snek_error for JIT to call
 #[export_name = "\x01snek_error"]
 pub extern "C" fn snek_error(errcode: i64) {
@@ -59,4 +52,18 @@ pub extern "C" fn snek_error(errcode: i64) {
     if !REPL.load(Ordering::SeqCst) {
         std::process::exit(1);
     }
+}
+
+#[export_name = "_snek_print"]
+pub extern "C" fn _snek_print(val: i64) -> i64 {
+    println!("{}", if val & 1 == 0 {
+        format!("{}", val >> 1)
+    } else if val == 1 {           // TRUE = 1
+        "true".to_string()
+    } else if val == 3 {           // FALSE = 3
+        "false".to_string()
+    } else {
+        format!("Unknown value: {}", val)
+    });
+    val
 }

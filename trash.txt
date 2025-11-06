@@ -1,0 +1,217 @@
+
+// pub fn compile_to_jit(
+//     program: &Program, 
+//     ops: &mut Assembler, 
+//     defines: &mut HashMap<String, i32>, 
+//     fun_ctx: &crate::compiler::FunContext
+// ) {
+//     // Create a map of label names to dynamic labels
+//     let mut label_map: StdHashMap<String, dynasmrt::DynamicLabel> = StdHashMap::new();
+    
+//     for defn in &program.defns {
+//         let fun_label = ops.new_dynamic_label();
+//         label_map.insert(defn.name.clone(), fun_label);
+//     }
+    
+//     for defn in &program.defns {
+//         let fun_label = label_map[&defn.name];
+    
+//         dynasm!(ops
+//             ; .arch x64
+//             ; =>fun_label
+//             ; push rbp
+//             ; mov rbp, rsp
+//         );
+        
+//         // Build environment for function parameters - THIS WAS MISSING!
+//         let n_args = defn.params.len() as i32;
+//         let mut env = HashMap::new();
+        
+//         for (i, param) in defn.params.iter().enumerate() {
+//             let offset = if i < 6 {
+//                 // First 6 args stored in our stack frame
+//                 -8 * ((i as i32) + 1)
+//             } else {
+//                 // Args beyond 6 are on caller stack
+//                 16 + 8 * ((n_args - 1) - (i as i32))
+//             };
+//             env = env.update(param.clone(), offset);
+//         }
+        
+//         // Determine stack space needed
+//         let (instrs, min_offset) = compile_to_instrs(
+//             &defn.body,
+//             -8 * ((n_args.min(6)) + 1),
+//             &env,  // ← Pass the environment with parameters!
+//             defines,
+//             fun_ctx,
+//             false,
+//             &None,
+//         );
+        
+//         // Allocate stack space
+//         let stack_space = if min_offset < 0 {
+//             let needed = (-min_offset) as i32;
+//             ((needed + 15) / 16) * 16
+//         } else {
+//             16
+//         };
+        
+//         dynasm!(ops
+//             ; .arch x64
+//             ; sub rsp, stack_space
+//         );
+        
+//         // Copy first 6 args from registers to stack
+//         let arg_regs = [Reg::RDI, Reg::RSI, Reg::RDX, Reg::RCX, Reg::R8, Reg::R9];
+//         for (i, _param) in defn.params.iter().enumerate() {
+//             if i < 6 {
+//                 let offset = -8 * ((i as i32) + 1);
+//                 // Emit instruction to save register to stack
+//                 let save_instr = Instr::IMov(
+//                     Val::RegOffset(Reg::RBP, offset), 
+//                     Val::Reg(arg_regs[i])
+//                 );
+//                 instr_to_dynasm(&save_instr, ops, &label_map);
+//             }
+//         }
+        
+//         // Emit function body instructions
+//         for instr in &instrs {
+//             instr_to_dynasm(instr, ops, &label_map);
+//         }
+        
+//         dynasm!(ops
+//             ; .arch x64
+//             ; mov rsp, rbp
+//             ; pop rbp
+//             ; ret
+//         );
+//     }
+    
+//     // Compile main expression
+//     let (instrs, _) = compile_to_instrs(
+//         &program.main, 
+//         -8, 
+//         &HashMap::new(), 
+//         defines, 
+//         fun_ctx, 
+//         true, 
+//         &None
+//     );
+    
+//     // DEBUG: Print all instructions that will be JIT compiled
+//     eprintln!("=== JIT Instructions ===");
+//     for instr in &instrs {
+//         eprintln!("{}", crate::instr::instr_to_str(instr));
+//     }
+//     eprintln!("========================\n");
+    
+//     // Pre-create error handler labels
+//     let snek_print = ops.new_dynamic_label();
+//     let error_overflow = ops.new_dynamic_label();
+//     let error_invalid_arg = ops.new_dynamic_label();
+//     label_map.insert("_snek_print".to_string(), snek_print);
+//     label_map.insert("error_overflow".to_string(), error_overflow);
+//     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
+    
+//     // First pass: collect all other labels
+//     for instr in &instrs {
+//         if let Instr::ILabel(label_name) = instr {
+//             if !label_map.contains_key(label_name) {
+//                 label_map.insert(label_name.clone(), ops.new_dynamic_label());
+//             }
+//         }
+//         // Also collect jump targets
+//         match instr {
+//             Instr::IJmp(label) | Instr::IJe(label) | Instr::IJne(label) | Instr::IJo(label) => {
+//                 if !label_map.contains_key(label) {
+//                     label_map.insert(label.clone(), ops.new_dynamic_label());
+//                 }
+//             }
+//             _ => {}
+//         }
+//     }
+    
+//     // Second pass: emit instructions
+//     for instr in &instrs {
+//         instr_to_dynasm(instr, ops, &label_map);
+//     }
+    
+//     dynasm!(ops
+//         ; .arch x64
+//         ; ret
+//     );
+    
+//     let snek_error_addr = crate::snek_error as *const () as i64;
+    
+//     // Add error handlers at the end
+//     dynasm!(ops
+//         ; .arch x64
+//         ; =>error_overflow
+//         ; mov rdi, 1
+//         ; mov rax, QWORD snek_error_addr as _
+//         ; call rax
+//         ; ret
+//         ; =>error_invalid_arg
+//         ; mov rdi, 2
+//         ; mov rax, QWORD snek_error_addr as _
+//         ; call rax
+//         ; ret
+//     );
+// }
+
+
+        // Expr::Call(name, args) => {
+        //     if !fun_ctx.check_function_exists(name) {
+        //         panic!("Undefined function: {}", name);
+        //     }
+        //     let expected = fun_ctx.get_param_count(name);
+        //     if args.len() != expected {
+        //         panic!("Wrong number of arguments for {}: expected {}, got {}", name, expected, args.len());
+        //     }
+
+        //     // Evaluate arguments right-to-left and place them at stack slots starting at si
+        //     let mut arg_si = si;
+        //     let mut local_min = current_min;
+        //     for arg in args.iter().rev() {
+        //         let (mut arg_code, arg_min) = compile_to_instrs(arg, arg_si - 8, env, defines, fun_ctx, input, loop_end);
+        //         local_min = local_min.min(arg_min);
+        //         code.append(&mut arg_code);
+
+        //         code.push(Instr::IMov(Val::RegOffset(Reg::RBP, arg_si), Val::Reg(Reg::RAX)));
+        //         local_min = local_min.min(arg_si);
+        //         arg_si -= 8;
+        //     }
+        //     current_min = current_min.min(local_min);
+
+        //     // Move args from stack slots into arg registers or push extras
+        //     let arg_regs = [Reg::RDI, Reg::RSI, Reg::RDX, Reg::RCX, Reg::R8, Reg::R9];
+        //     for (i, _) in args.iter().enumerate() {
+        //         let stack_pos = si - (i as i32 * 8);
+        //         if i < arg_regs.len() {
+        //             code.push(Instr::IMov(Val::Reg(arg_regs[i]), Val::RegOffset(Reg::RBP, stack_pos)));
+        //         } else {
+        //             // load into RAX then push
+        //             code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, stack_pos)));
+        //             code.push(Instr::IPush(Val::Reg(Reg::RAX)));
+        //         }
+        //     }
+
+        //     // If we pushed odd number of 8-bytes, align RSP before call.
+        //     // compute extra args count
+        //     let extra_args = if args.len() > 6 { args.len() - 6 } else { 0 };
+        //     // We'll adjust RSP if needed (we'll use 8 * extra_args, and then align to 16).
+        //     if extra_args > 0 {
+        //         // Round up to keep 16-byte alignment — produce ISUB/ IAdd on RSP
+        //         let adjust = ((extra_args as i32) * 8 + 15) / 16 * 16;
+        //         code.push(Instr::ISub(Val::Reg(Reg::RSP), Val::Imm(adjust)));
+        //     }
+
+        //     code.push(Instr::ICall(format!("fun_{}", name)));
+
+        //     if extra_args > 0 {
+        //         let adjust = ((extra_args as i32) * 8 + 15) / 16 * 16;
+        //         code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm(adjust)));
+        //     }
+        // }

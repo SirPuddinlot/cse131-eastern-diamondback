@@ -2,6 +2,7 @@
 use sexp::*;
 use sexp::Atom::*;
 use crate::ast::*;
+use im::HashMap;
 
 pub fn is_keyword(s: &str) -> bool {
     matches!(s, 
@@ -188,7 +189,32 @@ pub fn parse_expr(s: &Sexp) -> Expr {
                         }
                         Expr::Break(Box::new(parse_expr(&vec[1])))
                     }
-                    _ => panic!("unknown operation {}", op),
+
+                    "print" => {
+                        if vec.len() != 2 {
+                            panic!("Invalid: print takes exactly one argument");
+                        }
+                        Expr::UnOp(Op1::Print, Box::new(parse_expr(&vec[1])))
+                    }
+                    // At the end of parse_expr's Sexp::List match, before the final _ => panic!
+                    _ => {
+                        // Try to parse as function call
+                        if let Sexp::Atom(S(name)) = &vec[0] {
+                            if is_keyword(name) {
+                                panic!("unknown operation {}", name);
+                            }
+                            // It's a function call
+                            let mut args = Vec::new();
+                            for arg in &vec[1..] {
+                                args.push(parse_expr(arg));
+                            }
+                            return Expr::Call(name.clone(), args);
+                        } 
+                        else {
+                            panic!("expected operation or function name");
+                        }
+                    }
+                    // _ => panic!("unknown operation {}", op),
                 },
                 _ => panic!("expected operation"),
             }
@@ -220,4 +246,95 @@ pub fn parse_repl_entry(s: &Sexp, depth: usize) -> Result<ReplEntry, String> {
     }
     
     Ok(ReplEntry::Expr(parse_expr(s)))
+}
+
+
+// diamondback stuff
+
+pub fn parse_program(s: &Sexp) -> Program {
+    // Wrap in parens if not already a list (for compatibility)
+    let list = match s {
+        Sexp::List(vec) => vec,
+        _ => panic!("Program must be a list of definitions and expression"),
+    };
+    
+    let mut defns = Vec::new();
+    let mut main_expr = None;
+    
+    for (i, item) in list.iter().enumerate() {
+        if i == list.len() - 1 {
+            // Last item is the main expression
+            main_expr = Some(parse_expr(item));
+        } else {
+            // Everything else should be a function definition
+            defns.push(parse_defn(item));
+        }
+    }
+    
+    if main_expr.is_none() {
+        panic!("Program must have at least one expression");
+    }
+    
+    Program {
+        defns,
+        main: main_expr.unwrap(),
+    }
+}
+
+fn parse_defn(s: &Sexp) -> FunDefn {
+    match s {
+        Sexp::List(vec) => {
+            if vec.len() != 3 {
+                panic!("Invalid function definition");
+            }
+            
+            // Check first element is "fun"
+            match &vec[0] {
+                Sexp::Atom(S(op)) if op == "fun" => {}
+                _ => panic!("Expected 'fun'"),
+            }
+            
+            // Parse (name param1 param2 ...)
+            let (name, params) = match &vec[1] {
+                Sexp::List(sig) => {
+                    if sig.is_empty() {
+                        panic!("Function signature cannot be empty");
+                    }
+                    let name = match &sig[0] {
+                        Sexp::Atom(S(n)) => n.clone(),
+                        _ => panic!("Function name must be identifier"),
+                    };
+                    
+                    let mut params = Vec::new();
+                    let mut seen = HashMap::new();
+                    for param in &sig[1..] {
+                        match param {
+                            Sexp::Atom(S(p)) => {
+                                if is_keyword(p) {
+                                    panic!("keyword");
+                                }
+                                if seen.contains_key(p) {
+                                    panic!("Duplicate binding");
+                                }
+                                seen = seen.update(p.clone(), ());
+                                params.push(p.clone());
+                            }
+                            _ => panic!("Parameter must be identifier"),
+                        }
+                    }
+                    (name, params)
+                }
+                _ => panic!("Invalid function signature"),
+            };
+            
+            let body = parse_expr(&vec[2]);
+            
+            FunDefn {
+                name,
+                params,
+                body: Box::new(body),
+            }
+        }
+        _ => panic!("Function definition must be a list"),
+    }
 }

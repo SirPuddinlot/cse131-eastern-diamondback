@@ -6,6 +6,11 @@ pub enum Reg {
     RCX,
     RDI,
     R15,
+    RSI,
+    RDX,
+    R8,
+    R9,
+    RBP,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +49,11 @@ pub enum Instr {
     IOr(Val, Val),
     IXor(Val, Val),
     ISar(Val, Val),  // Shift arithmetic right
+
+    ICall(String),
+    IRet,
+    IPush(Val),
+    IPop(Val),
 }
 
 
@@ -53,8 +63,13 @@ pub fn val_to_str(v: &Val) -> String {
         Val::Reg(reg) => match reg {
             Reg::RAX => "rax".to_string(),
             Reg::RSP => "rsp".to_string(),
+            Reg::RBP => "rbp".to_string(),  // ADD THIS
             Reg::RCX => "rcx".to_string(),
             Reg::RDI => "rdi".to_string(),
+            Reg::RSI => "rsi".to_string(),  // ADD THIS
+            Reg::RDX => "rdx".to_string(),  // ADD THIS
+            Reg::R8 => "r8".to_string(),    // ADD THIS
+            Reg::R9 => "r9".to_string(),    // ADD THIS
             Reg::R15 => "r15".to_string(),
         },
         Val::Imm(n) => format!("{}", n),
@@ -62,15 +77,39 @@ pub fn val_to_str(v: &Val) -> String {
             let reg_str = match reg {
                 Reg::RAX => "rax",
                 Reg::RSP => "rsp",
+                Reg::RBP => "rbp",  // ADD THIS
                 Reg::RCX => "rcx",
                 Reg::RDI => "rdi",
+                Reg::RSI => "rsi",  // ADD THIS
+                Reg::RDX => "rdx",  // ADD THIS
+                Reg::R8 => "r8",    // ADD THIS
+                Reg::R9 => "r9",    // ADD THIS
                 Reg::R15 => "r15",
             };
-            format!("[{} - {}]", reg_str, offset)
+            // Use + for positive offsets (heap/parameters), - for negative (locals)
+            if *offset >= 0 {
+                format!("[{} + {}]", reg_str, offset)
+            } else {
+                format!("[{} - {}]", reg_str, -offset)
+            }
         }
     }
 }
 
+pub fn reg_to_str(reg: &Reg) -> &str {
+    match reg {
+        Reg::RAX => "rax",
+        Reg::RSP => "rsp",
+        Reg::RBP => "rbp",
+        Reg::RCX => "rcx",
+        Reg::RDI => "rdi",
+        Reg::RSI => "rsi",
+        Reg::RDX => "rdx",
+        Reg::R8 => "r8",
+        Reg::R9 => "r9",
+        Reg::R15 => "r15",
+    }
+}
 pub fn instr_to_str(i: &Instr) -> String {
     match i {
         Instr::IMov(dest, src) => format!("  mov {}, {}", val_to_str(dest), val_to_str(src)),
@@ -94,6 +133,9 @@ pub fn instr_to_str(i: &Instr) -> String {
         Instr::IOr(dest, src) => format!("  or {}, {}", val_to_str(dest), val_to_str(src)),
         Instr::IXor(dest, src) => format!("  xor {}, {}", val_to_str(dest), val_to_str(src)),
         Instr::ISar(dest, src) => format!("  sar {}, {}", val_to_str(dest), val_to_str(src)),
-
+        Instr::ICall(label) => format!("  call {}", label),
+        Instr::IRet => "  ret".to_string(),
+        Instr::IPush(val) => format!("  push {}", val_to_str(val)),
+        Instr::IPop(val) => format!("  pop {}", val_to_str(val)),
     }
 }

@@ -15,11 +15,13 @@ use std::io::prelude::*;
 use im::HashMap;
 use dynasmrt::*;
 use std::mem;
-
+use sexp::Sexp;
+use crate::compiler::FunContext;
 use crate::parser::parse_expr;
 use crate::compiler::compile;
 use crate::jit::compile_to_jit;
-use crate::repl::run_repl;
+use crate::parser::parse_program;
+// use crate::repl::run_repl;
 use crate::helpers::*;
 
 fn main() -> std::io::Result<()> {
@@ -36,18 +38,18 @@ fn main() -> std::io::Result<()> {
 
     let flag = &args[1];
     
-    match flag.as_str() {
-        "-i" => {
-            // REPL mode
-            //println!("REPL flag is before running: {}", REPL.load(Ordering::SeqCst));
+    // match flag.as_str() {
+    //     "-i" => {
+    //         // REPL mode
+    //         //println!("REPL flag is before running: {}", REPL.load(Ordering::SeqCst));
 
-            REPL.store(true, Ordering::SeqCst);
-            // println!("REPL flag is after: {}", REPL.load(Ordering::SeqCst));
+    //         REPL.store(true, Ordering::SeqCst);
+    //         // println!("REPL flag is after: {}", REPL.load(Ordering::SeqCst));
 
-            return run_repl();
-        }
-        _ => {}
-    }
+    //         return run_repl();
+    //     }
+    //     _ => {}
+    // }
 
     if args.len() < 3 {
         eprintln!("Usage: {} <-c|-e|-g> <input.cobra> [arg]", args[0]);
@@ -63,20 +65,36 @@ fn main() -> std::io::Result<()> {
     let mut in_file = File::open(in_name)?;
     let mut in_contents = String::new();
     in_file.read_to_string(&mut in_contents)?;
+    // Trim leading/trailing whitespace
+    let trimmed = in_contents.trim();
 
-    let sexp = sexp::parse(&in_contents).map_err(|e| {
+    // Detect if it starts and ends with '(' … ')' (i.e., already a top-level list)
+    let wrapped_source = if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        trimmed.to_string()
+    } else {
+        // Wrap in parentheses
+        format!("({})", trimmed)
+    };
+
+    let sexp = sexp::parse(&wrapped_source).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Parse error: {}", e))
     })?;
 
-    let expr = parse_expr(&sexp);
+    let prog = parse_program(&sexp);
+    
     
     match flag.as_str() {
         "-c" => {
             // AOT compilation only
             let out_name = &args[3];
-            let result = compile(&expr);
+            let result = compile(&prog);
             let asm_program = format!(
-                "section .text\nglobal our_code_starts_here\nextern snek_error\nour_code_starts_here:\n{}",
+                "section .text
+global our_code_starts_here
+extern snek_error
+extern _snek_print
+
+{}",
                 result
             );
             //println!("{}", asm_program);
@@ -92,12 +110,13 @@ fn main() -> std::io::Result<()> {
             };
             
             let input = parse_input(input_str);
+            // eprint!("input is {}\n", input);
             
-            eprintln!("Input string: {}", input_str);
-            eprintln!("Input value (tagged): {:#018b} = {}", input, input);
-            if input & 1 == 0 {
-                eprintln!("  Represents number: {}", input >> 1);
-            }
+            // eprintln!("Input string: {}", input_str);
+            // eprintln!("Input value (tagged): {:#018b} = {}", input, input);
+            // if input & 1 == 0 {
+            //     eprintln!("  Represents number: {}", input >> 1);
+            // }
             
             let mut ops = dynasmrt::x64::Assembler::new().unwrap();
             
@@ -112,9 +131,29 @@ fn main() -> std::io::Result<()> {
                 ; mov r15, QWORD heap_ptr as _
             );
             
-            compile_to_jit(&expr, &mut ops, &mut HashMap::new());
+            let mut fun_ctx = FunContext::new(&prog.defns);
+            compile_to_jit(&prog, &mut ops, &mut HashMap::new(), &mut fun_ctx);
 
             let buf = ops.finalize().unwrap();
+            
+            use capstone::prelude::*;
+
+            fn disassemble(buf: &[u8]) {
+                let cs = Capstone::new()
+                    .x86()
+                    .mode(capstone::arch::x86::ArchMode::Mode64)
+                    .build()
+                    .unwrap();
+
+                let insns = cs.disasm_all(buf, 0x1000).unwrap();
+                for i in insns.iter() {
+                    println!("0x{:x}: {}\t{}", i.address(), i.mnemonic().unwrap_or(""), i.op_str().unwrap_or(""));
+                }
+            }
+            disassemble(&buf);
+            let jitted_fn_ptr = buf.ptr(start);
+            println!("JIT fn ptr = {:p}", jitted_fn_ptr);
+
             let jitted_fn: extern "C" fn(i64) -> i64 = unsafe { mem::transmute(buf.ptr(start)) };
             
             // eprintln!("\nCalling JIT function with input: {}", input);
@@ -124,41 +163,41 @@ fn main() -> std::io::Result<()> {
             
             print_result(result_val);
         }
-        "-g" => {
-            // Both: JIT execution and AOT compilation
-            let input = if args.len() > 3 {
-                parse_input(&args[3])
-            } else {
-                FALSE_VAL
-            };
+        // "-g" => {
+        //     // Both: JIT execution and AOT compilation
+        //     let input = if args.len() > 3 {
+        //         parse_input(&args[3])
+        //     } else {
+        //         FALSE_VAL
+        //     };
             
-            // JIT compilation and execution
-            let mut ops = dynasmrt::x64::Assembler::new().unwrap();
-            let start = ops.offset();
+        //     // JIT compilation and execution
+        //     let mut ops = dynasmrt::x64::Assembler::new().unwrap();
+        //     let start = ops.offset();
             
-            compile_to_jit(&expr, &mut ops, &mut HashMap::new());
+        //     compile_to_jit(&expr, &mut ops, &mut HashMap::new());
             
-            // dynasm!(ops
-            //     ; .arch x64
-            //     ; ret
-            // );
+        //     // dynasm!(ops
+        //     //     ; .arch x64
+        //     //     ; ret
+        //     // );
 
-            let buf = ops.finalize().unwrap();
-            let jitted_fn: extern "C" fn(i64) -> i64 = unsafe { mem::transmute(buf.ptr(start)) };
-            let result_val = jitted_fn(input);
+        //     let buf = ops.finalize().unwrap();
+        //     let jitted_fn: extern "C" fn(i64) -> i64 = unsafe { mem::transmute(buf.ptr(start)) };
+        //     let result_val = jitted_fn(input);
             
-            println!("JIT Result: ");
-            print_result(result_val);
+        //     println!("JIT Result: ");
+        //     print_result(result_val);
             
-            // AOT compilation output
-            println!("\n=== Generated Assembly ===");
-            let result = compile(&expr);
-            let asm_program = format!(
-                "section .text\nglobal our_code_starts_here\nextern snek_error\nour_code_starts_here:\n{}",
-                result
-            );
-            println!("{}", asm_program);
-        }
+        //     // AOT compilation output
+        //     println!("\n=== Generated Assembly ===");
+        //     let result = compile(&expr);
+        //     let asm_program = format!(
+        //         "section .text\nglobal our_code_starts_here\nextern snek_error\nour_code_starts_here:\n{}",
+        //         result
+        //     );
+        //     println!("{}", asm_program);
+        // }
         _ => {
             eprintln!("Error: Unknown flag '{}'", flag);
             eprintln!("Usage: {} <-c|-e|-g> <input.cobra> [arg]", args[0]);

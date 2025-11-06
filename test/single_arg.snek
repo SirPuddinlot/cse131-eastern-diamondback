@@ -1,0 +1,7 @@
+(
+(fun (twoparams x)
+    (+ 100 x)
+)
+
+(twoparams 6)
+)

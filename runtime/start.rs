@@ -37,6 +37,21 @@ pub extern "C" fn snek_error(errcode: i64) {
     std::process::exit(1);
 }
 
+#[export_name = "snek_print"]
+pub extern "C" fn snek_print(val: i64) -> i64 {
+    // Print the value and return it
+    println!("{}", if val & 1 == 0 {
+        format!("{}", val >> 1)
+    } else if val == 1 {
+        "true".to_string()
+    } else if val == 3 {
+        "false".to_string()
+    } else {
+        format!("Unknown value: {}", val)
+    });
+    val
+}
+
 const TRUE_VAL: i64 = 1;   // 0b01
 const FALSE_VAL: i64 = 3;  // 0b11
 

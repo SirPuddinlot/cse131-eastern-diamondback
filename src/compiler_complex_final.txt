@@ -4,8 +4,8 @@ use crate::ast::*;
 use crate::instr::*;
 
 static mut LABEL_COUNTER: i32 = 0;
-static mut HEAP_OFFSET: i32 = 0;
-static mut INPUT_HEAP_OFFSET: Option<i32> = None;
+static mut HEAP_OFFSET: i32 = 0;  // Track heap allocations
+static mut INPUT_HEAP_OFFSET: Option<i32> = None;  // Global input storage location
 
 fn new_label(prefix: &str) -> String {
     unsafe {
@@ -14,15 +14,17 @@ fn new_label(prefix: &str) -> String {
     }
 }
 
+// Allocate space on the heap for a define variable
 fn alloc_heap_slot() -> i32 {
     unsafe {
         let offset = HEAP_OFFSET;
-        HEAP_OFFSET += 8;
+        HEAP_OFFSET += 8;  // 8 bytes per slot
         offset
-    }
+    } 
 }
 
-pub fn get_input_heap_offset() -> i32 {
+// Get the heap offset for input storage (allocates if needed)
+fn get_input_heap_offset() -> i32 {
     unsafe {
         if INPUT_HEAP_OFFSET.is_none() {
             INPUT_HEAP_OFFSET = Some(alloc_heap_slot());
@@ -32,11 +34,11 @@ pub fn get_input_heap_offset() -> i32 {
 }
 
 pub struct FunContext {
-    pub functions: HashMap<String, FunDefn>,
+    pub functions: HashMap<String, FunDefn>,  // Map function names to definitions
 }
 
 impl FunContext {
-    pub fn new(defns: &[FunDefn]) -> Self {
+    pub fn new(defns: &[FunDefn]) -> Self { // Make new() public
         let mut functions = HashMap::new();
         let mut seen = std::collections::HashSet::new();
         
@@ -45,24 +47,25 @@ impl FunContext {
                 panic!("Duplicate function definition: {}", defn.name);
             }
             seen.insert(defn.name.clone());
-            functions = functions.update(defn.name.clone(), defn.clone());
+            functions = functions.update(defn.name.clone(), (*defn).clone());
         }
         
         FunContext { functions }
     }
     
-    pub fn check_function_exists(&self, name: &str) -> bool {
+    fn check_function_exists(&self, name: &str) -> bool {
         self.functions.contains_key(name)
     }
     
-    pub fn get_param_count(&self, name: &str) -> usize {
+    fn get_param_count(&self, name: &str) -> usize {
         self.functions.get(name).map(|f| f.params.len()).unwrap_or(0)
     }
 }
 
-const TRUE_VAL: i32 = 1;
-const FALSE_VAL: i32 = 3;
+const TRUE_VAL: i32 = 1;   
+const FALSE_VAL: i32 = 3;  
 
+// NOTE: replace the old compile_to_instrs signature with this one everywhere
 pub fn compile_to_instrs(
     e: &Expr,
     si: i32,
@@ -72,6 +75,7 @@ pub fn compile_to_instrs(
     input: bool,
     loop_end: &Option<String>,
 ) -> (Vec<Instr>, i32) {
+    // current_min is the most-negative offset we've used so far (start with si)
     let mut code: Vec<Instr> = Vec::new();
     let mut current_min = si;
 
@@ -85,14 +89,17 @@ pub fn compile_to_instrs(
         }
         Expr::Input => {
             let input_heap_offset = get_input_heap_offset();
+            // Always load input from heap - consistent behavior everywhere
             code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::R15, input_heap_offset)));
         }
         Expr::Id(name) => {
             if let Some(&offset) = env.get(name) {
                 code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)));
-            } else if let Some(&heap_offset) = defines.get(name) {
+            } 
+            else if let Some(&heap_offset) = defines.get(name) {
                 code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::R15, heap_offset)));
-            } else {
+            } 
+            else {
                 panic!("Unbound variable identifier {}", name);
             }
         }
@@ -106,13 +113,11 @@ pub fn compile_to_instrs(
                     code.push(Instr::ITest(Val::Reg(Reg::RAX), Val::Imm(1)));
                     code.push(Instr::IJne("error_invalid_argument".to_string()));
                     code.push(Instr::IAdd(Val::Reg(Reg::RAX), Val::Imm(1 << 1)));
-                    code.push(Instr::IJo("error_overflow".to_string()));
                 }
                 Op1::Sub1 => {
                     code.push(Instr::ITest(Val::Reg(Reg::RAX), Val::Imm(1)));
                     code.push(Instr::IJne("error_invalid_argument".to_string()));
                     code.push(Instr::ISub(Val::Reg(Reg::RAX), Val::Imm(1 << 1)));
-                    code.push(Instr::IJo("error_overflow".to_string()));
                 }
                 Op1::IsNum => {
                     code.push(Instr::ITest(Val::Reg(Reg::RAX), Val::Imm(1)));
@@ -126,29 +131,40 @@ pub fn compile_to_instrs(
                     code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Imm(FALSE_VAL)));
                     code.push(Instr::ICMovE(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)));
                 }
+                // Op1::Print => {
+                //     code.push(Instr::IMov(Val::Reg(Reg::RDI), Val::Reg(Reg::RAX)));
+                //     code.push(Instr::ICall("_snek_print".to_string()));
+                // }
                 Op1::Print => {
+                    // Save RAX before the call since _snek_print may clobber it
                     code.push(Instr::IPush(Val::Reg(Reg::RAX)));
                     code.push(Instr::IMov(Val::Reg(Reg::RDI), Val::Reg(Reg::RAX)));
                     code.push(Instr::ICall("_snek_print".to_string()));
+                    // Restore RAX after the call
                     code.push(Instr::IPop(Val::Reg(Reg::RAX)));
                 }
             }
         }
         Expr::BinOp(op, left, right) => {
+            // compile left, store to [rbp + si], compile right, result in RAX,
+            // then load left back / operate.
             let (mut left_code, left_min) = compile_to_instrs(left, si, env, defines, fun_ctx, input, loop_end);
             current_min = current_min.min(left_min);
             code.append(&mut left_code);
 
+            // store left at si
             code.push(Instr::IMov(Val::RegOffset(Reg::RBP, si), Val::Reg(Reg::RAX)));
             current_min = current_min.min(si);
 
+            // compile right into RAX (use si-8 for temporaries)
             let (mut right_code, right_min) = compile_to_instrs(right, si - 8, env, defines, fun_ctx, input, loop_end);
             current_min = current_min.min(right_min);
             code.append(&mut right_code);
 
             match op {
                 Op2::Plus | Op2::Minus | Op2::Times => {
-                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX)));
+                    // runtime type check: OR left and right (left in memory at si)
+                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX))); // right -> rcx
                     code.push(Instr::IOr(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si)));
                     code.push(Instr::ITest(Val::Reg(Reg::RCX), Val::Imm(1)));
                     code.push(Instr::IJne("error_invalid_argument".to_string()));
@@ -159,34 +175,38 @@ pub fn compile_to_instrs(
                             code.push(Instr::IJo("error_overflow".to_string()));
                         }
                         Op2::Minus => {
-                            code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX)));
-                            code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si)));
+                            code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX))); // right -> rcx
+                            code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si))); // left -> rax
                             code.push(Instr::ISub(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)));
                             code.push(Instr::IJo("error_overflow".to_string()));
                         }
                         Op2::Times => {
-                            code.push(Instr::ISar(Val::Reg(Reg::RAX), Val::Imm(1)));
-                            code.push(Instr::IMul(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si)));
+                            code.push(Instr::ISar(Val::Reg(Reg::RAX), Val::Imm(1))); // untag right (in RAX)
+                            // multiply left (in memory) by RAX -> need left in RCX or use IMul Reg, RegOffset supported by backend?
+                            // to be safe, move left into RCX
+                            code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si)));
+                            code.push(Instr::IMul(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)));
                             code.push(Instr::IJo("error_overflow".to_string()));
                         }
                         _ => unreachable!(),
                     }
                 }
                 Op2::Less | Op2::Greater | Op2::LessEqual | Op2::GreaterEqual => {
-                    code.push(Instr::IMov(Val::RegOffset(Reg::RBP, si - 8), Val::Reg(Reg::RAX)));
-                    current_min = current_min.min(si - 8);
-                    
-                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX)));
-                    code.push(Instr::IOr(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si)));
+                    // Type check: both must be numbers
+                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX))); // right -> RCX
+                    code.push(Instr::IOr(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si))); // OR with left
                     code.push(Instr::ITest(Val::Reg(Reg::RCX), Val::Imm(1)));
                     code.push(Instr::IJne("error_invalid_argument".to_string()));
                     
-                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si)));
-                    code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si - 8)));
-                    code.push(Instr::ICmp(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX)));
+                    // After type check, reload the operands for comparison
+                    // Load left into RAX and right into RCX for proper comparison order
+                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Reg(Reg::RAX))); // right -> RCX  
+                    code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si))); // left -> RAX
+                    code.push(Instr::ICmp(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX))); // compare left with right
                     
-                    code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::Imm(FALSE_VAL)));
-                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Imm(TRUE_VAL)));
+                    // Set result
+                    code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::Imm(FALSE_VAL))); // FALSE = 3
+                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Imm(TRUE_VAL)));  // TRUE = 1
                     
                     match op {
                         Op2::Less => code.push(Instr::ICMovL(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX))),
@@ -197,7 +217,10 @@ pub fn compile_to_instrs(
                     }
                 }
                 Op2::Equal => {
-                    code.push(Instr::ICmp(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, si)));
+                    // Ensure both in registers before cmp
+                    code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, si))); // left -> rcx
+                    current_min = current_min.min(si);
+                    code.push(Instr::ICmp(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)));
                     code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::Imm(TRUE_VAL)));
                     code.push(Instr::IMov(Val::Reg(Reg::RCX), Val::Imm(FALSE_VAL)));
                     code.push(Instr::ICMovNE(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)));
@@ -241,11 +264,24 @@ pub fn compile_to_instrs(
 
             code.push(Instr::ILabel(end_label));
         }
+        // Expr::Block(exprs) => {
+        //     for expr in exprs {
+        //         let (mut expr_code, expr_min) = compile_to_instrs(expr, si, env, defines, fun_ctx, input, loop_end);
+        //         current_min = current_min.min(expr_min);
+        //         code.append(&mut expr_code);
+        //     }
+        // }
         Expr::Block(exprs) => {
-            for expr in exprs {
+            for (i, expr) in exprs.iter().enumerate() {
                 let (mut expr_code, expr_min) = compile_to_instrs(expr, si, env, defines, fun_ctx, input, loop_end);
                 current_min = current_min.min(expr_min);
                 code.append(&mut expr_code);
+                
+                // If this is not the last expression, we don't care about the result
+                if i < exprs.len() - 1 {
+                    // The value is in RAX, but we don't need it - just leave it there
+                    // or optionally pop it if you want to be clean
+                }
             }
         }
         Expr::Let(bindings, body) => {
@@ -261,7 +297,8 @@ pub fn compile_to_instrs(
                 seen_names = seen_names.update(name.clone(), ());
             }
 
-            for (name, expr) in bindings {
+            for (name, expr) in bindings.iter() {
+                // allocate next slot at current_si
                 let (mut expr_code, expr_min) = compile_to_instrs(expr, current_si - 8, &new_env, defines, fun_ctx, input, loop_end);
                 local_min = local_min.min(expr_min);
                 code.append(&mut expr_code);
@@ -291,7 +328,10 @@ pub fn compile_to_instrs(
             code.push(Instr::ILabel(loop_end_label));
         }
         Expr::Break(expr) => {
-            let loop_end_label = loop_end.as_ref().expect("break outside of loop").clone();
+            if loop_end.is_none() {
+                panic!("break");
+            }
+            let loop_end_label = loop_end.as_ref().unwrap().clone();
             let (mut expr_code, expr_min) = compile_to_instrs(expr, si, env, defines, fun_ctx, input, loop_end);
             current_min = current_min.min(expr_min);
             code.append(&mut expr_code);
@@ -305,28 +345,55 @@ pub fn compile_to_instrs(
             if args.len() != expected {
                 panic!("Wrong number of arguments for {}: expected {}, got {}", name, expected, args.len());
             }
-            let arg_bytes = (args.len() * 8) as i32;
-
-            let needs_pad = (arg_bytes + 8) % 16 != 0;
-            if needs_pad {
-                code.push(Instr::ISub(Val::Reg(Reg::RSP), Val::Imm(8)));
-            }
-            
-            for arg in args.iter().rev() {
-                let (mut arg_code, arg_min) = compile_to_instrs(arg, si, env, defines, fun_ctx, input, loop_end);
-                current_min = current_min.min(arg_min);
+        
+            // Evaluate arguments left-to-right
+            let mut arg_si = si;
+            let mut local_min = current_min;
+            for arg in args.iter() {
+                let (mut arg_code, arg_min) = compile_to_instrs(arg, arg_si - 8, env, defines, fun_ctx, input, loop_end);
+                local_min = local_min.min(arg_min);
                 code.append(&mut arg_code);
-                code.push(Instr::IPush(Val::Reg(Reg::RAX)));
+        
+                code.push(Instr::IMov(Val::RegOffset(Reg::RBP, arg_si), Val::Reg(Reg::RAX)));
+                local_min = local_min.min(arg_si);
+                arg_si -= 8;
             }
+            current_min = current_min.min(local_min);
+        
+            // Move args into registers or push extras
+            let arg_regs = [Reg::RDI, Reg::RSI, Reg::RDX, Reg::RCX, Reg::R8, Reg::R9];
+            for (i, _) in args.iter().enumerate() {
+                let stack_pos = si - (i as i32 * 8);
+                if i < arg_regs.len() {
+                    code.push(Instr::IMov(Val::Reg(arg_regs[i]), Val::RegOffset(Reg::RBP, stack_pos)));
+                } else {
+                    code.push(Instr::IMov(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, stack_pos)));
+                    code.push(Instr::IPush(Val::Reg(Reg::RAX)));
+                }
+            }
+        
+            // NO RSP adjustment needed - the pushes already did it!
+            // Just need to ensure 16-byte alignment before call
+            let extra_args = if args.len() > 6 { args.len() - 6 } else { 0 };
+            let pushed_bytes = extra_args * 8;
             
+            // Check if we need alignment padding
+            // After call, RSP must be 16-byte aligned
+            // We've pushed extra_args * 8 bytes
+            // If that's not a multiple of 16, add padding
+            let padding = if pushed_bytes % 16 != 0 { 8 } else { 0 };
+            if padding > 0 {
+                code.push(Instr::ISub(Val::Reg(Reg::RSP), Val::Imm(padding)));
+            }
+        
             code.push(Instr::ICall(format!("fun_{}", name)));
-            
-            if arg_bytes > 0 {
-                code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm(arg_bytes)));
+        
+            // Clean up: remove padding and popped args
+            if padding > 0 {
+                code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm(padding)));
             }
-            
-            if needs_pad {
-                code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm(8)));
+            if extra_args > 0 {
+                code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm((extra_args * 8) as i32)));
             }
         }
     }
@@ -334,28 +401,27 @@ pub fn compile_to_instrs(
     (code, current_min)
 }
 
+
 pub fn compile(program: &Program) -> String {
-    unsafe {
-        LABEL_COUNTER = 0;
-        HEAP_OFFSET = 0;
-        INPUT_HEAP_OFFSET = None;
-    }
-    
     let fun_ctx = FunContext::new(&program.defns);
     let mut asm_code = String::new();
     
+    // Check for 'input' in function bodies
     for defn in &program.defns {
         check_no_input(&defn.body);
     }
     
+    // Compile each function definition
     for defn in &program.defns {
         asm_code.push_str(&compile_function(defn, &fun_ctx));
     }
     
+    // Prologue
     asm_code.push_str("our_code_starts_here:\n");
     asm_code.push_str("  push rbp\n");
     asm_code.push_str("  mov rbp, rsp\n");
     
+    // Store input to heap at the very beginning
     let input_heap_offset = get_input_heap_offset();
     asm_code.push_str(&format!("  mov [r15 + {}], rdi\n", input_heap_offset));
     
@@ -369,11 +435,9 @@ pub fn compile(program: &Program) -> String {
         &None
     );
 
-    // Allocate stack space for local variables if needed
-    // Only allocate if we've actually used stack slots (min_offset < -8 means we used [rbp-16] or lower)
-    if min_offset <= -16 {
-        let needed = -min_offset - 8;  // Subtract 8 because -8 is just the starting point
-        let stack_space = ((needed + 15) / 16) * 16;
+    let needed = -min_offset;
+    let stack_space = if needed <= 0 { 0 } else { ((needed + 15) / 16) * 16 };
+    if stack_space > 0 {
         asm_code.push_str(&format!("  sub rsp, {}\n", stack_space));
     }
 
@@ -382,20 +446,20 @@ pub fn compile(program: &Program) -> String {
         asm_code.push('\n');
     }
     
+    // Epilogue
     asm_code.push_str("  mov rsp, rbp\n");
     asm_code.push_str("  pop rbp\n");
     asm_code.push_str("  ret\n");
     
+    // Error handlers...
     asm_code.push_str("\nerror_overflow:\n");
     asm_code.push_str("  mov rdi, 1\n");
     asm_code.push_str("  call snek_error\n");
     asm_code.push_str("  ret\n");
-    
     asm_code.push_str("\nerror_invalid_argument:\n");
     asm_code.push_str("  mov rdi, 2\n");
     asm_code.push_str("  call snek_error\n");
     asm_code.push_str("  ret\n");
-    
     asm_code
 }
 
@@ -403,18 +467,29 @@ fn compile_function(defn: &FunDefn, fun_ctx: &FunContext) -> String {
     let mut code = String::new();
     code.push_str(&format!("fun_{}:\n", defn.name));
 
+    // --- Prologue ---
     code.push_str("  push rbp\n");
     code.push_str("  mov rbp, rsp\n");
 
+    let n_args = defn.params.len() as i32;
+
+    // --- Environment setup ---
     let mut env = HashMap::new();
     for (i, param) in defn.params.iter().enumerate() {
-        let offset = 16 + (i as i32 * 8);
+        let offset = if i < 6 {
+            // First 6 args stored in our stack frame
+            -8 * ((i as i32) + 1)
+        } else {
+            // Args beyond 6 are already on caller stack ([rbp+16], [rbp+24], ...)
+            16 + 8 * ((n_args - 1) - (i as i32))
+        };
         env.insert(param.clone(), offset);
     }
 
+    // --- Compile body to find min offset for temporaries ---
     let (instrs, min_offset) = compile_to_instrs(
         &defn.body,
-        -8,
+        -8 * ((n_args.min(6)) + 1), // temporaries start below stored args
         &env,
         &HashMap::new(),
         fun_ctx,
@@ -422,18 +497,32 @@ fn compile_function(defn: &FunDefn, fun_ctx: &FunContext) -> String {
         &None,
     );
 
-    // Allocate stack space for local variables if needed
-    if min_offset < 0 {
-        let needed = -min_offset;
-        let stack_space = ((needed + 15) / 16) * 16;
-        code.push_str(&format!("  sub rsp, {}\n", stack_space));
+    // --- Compute total stack space needed and align to 16 bytes ---
+    let stack_space = if min_offset < 0 {
+        let needed = (-min_offset) as i32;
+        ((needed + 15) / 16) * 16
+    } else {
+        16 // minimum alignment
+    };
+    code.push_str(&format!("  sub rsp, {}\n", stack_space));
+
+    // --- Move first 6 args from registers into stack slots ---
+    let arg_regs = [Reg::RDI, Reg::RSI, Reg::RDX, Reg::RCX, Reg::R8, Reg::R9];
+    for (i, _param) in defn.params.iter().enumerate() {
+        if i < 6 {
+            let offset = -8 * ((i as i32) + 1);
+            code.push_str(&format!("  mov [rbp{}], {}\n", offset, reg_to_str(&arg_regs[i])));
+        }
+        // Args > 6 remain on caller stack at [rbp+16+...]
     }
 
+    // --- Emit instructions from compiled body ---
     for instr in instrs {
         code.push_str(&instr_to_str(&instr));
         code.push('\n');
     }
 
+    // --- Epilogue ---
     code.push_str("  mov rsp, rbp\n");
     code.push_str("  pop rbp\n");
     code.push_str("  ret\n");
@@ -442,14 +531,18 @@ fn compile_function(defn: &FunDefn, fun_ctx: &FunContext) -> String {
 }
 
 fn check_no_input(expr: &Expr) {
-    if let Expr::Input = expr {
-        panic!("input not allowed in function definitions");
+    match expr {
+        Expr::Input => panic!("input not allowed in function definitions"),
+        // ... recursively check all sub-expressions ...
+        _ => {} // Implement full traversal
     }
 }
 
+// For REPL: compile a define and return its heap offset
 pub fn compile_define(name: &str, expr: &Expr, defines: &HashMap<String, i32>, fun_ctx: &FunContext) -> (i32, Vec<Instr>) {
     let heap_offset = alloc_heap_slot();
-    let (mut code, _) = compile_to_instrs(expr, -8, &HashMap::new(), defines, fun_ctx, false, &None);
+    let (mut code, _): (Vec<Instr>, i32) = compile_to_instrs(expr, -8, &HashMap::new(), defines, fun_ctx, false, &None);
+    // Store the result in the heap
     code.push(Instr::IMov(Val::RegOffset(Reg::R15, heap_offset), Val::Reg(Reg::RAX)));
     (heap_offset, code)
 }

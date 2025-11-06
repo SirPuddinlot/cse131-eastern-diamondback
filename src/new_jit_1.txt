@@ -32,6 +32,7 @@ pub fn compile_to_jit(
     
     // Compile all function definitions with stack-based calling convention
     for defn in &program.defns {
+        //test 
         println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
 
         let fun_label = label_map[&format!("fun_{}", defn.name)];
@@ -46,18 +47,19 @@ pub fn compile_to_jit(
         // Build environment: parameters are on caller's stack at [rbp+16], [rbp+24], etc.
         let mut env = HashMap::new();
         for (i, param) in defn.params.iter().enumerate() {
-            let offset = 16 + (i as i32 * 8);
+            let offset = 16 + (i as i32 * 8);  // Positive offsets!
             env = env.update(param.clone(), offset);
         }
 
+        //test
         println!("=== Compiling function: {} ===", defn.name);
         println!("Parameters: {:?}", defn.params);
-        println!("Body: {:?}", defn.body);
+        println!("Body: {:?}", defn.body);  // This should show the actual function body
 
         // Compile function body
         let (instrs, min_offset) = compile_to_instrs(
             &defn.body,
-            -8,
+            -8, // temporaries start at -8
             &env,
             defines,
             fun_ctx,
@@ -65,20 +67,25 @@ pub fn compile_to_jit(
             &None,
         );
 
-        println!("=== Instructions for {} body ===", defn.name);
-        for instr in &instrs {
+        //test
+        println!("=== Instructions for fun_issum body ===");
+        for instr in &instrs {  // Use func_instrs here
             println!("{:?}", instr);
         }
+            
         
-        // Allocate stack space for local variables if needed
-        if min_offset < 0 {
-            let needed = -min_offset;
-            let stack_space = ((needed + 15) / 16) * 16;
-            dynasm!(ops
-                ; .arch x64
-                ; sub rsp, stack_space as i32
-            );
-        }
+        // Allocate stack space for temporaries
+        let stack_space = if min_offset < 0 {
+            let needed = (-min_offset) as i32;
+            ((needed + 15) / 16) * 16
+        } else {
+            16
+        };
+        
+        dynasm!(ops
+            ; .arch x64
+            ; sub rsp, stack_space
+        );
         
         // Collect labels used in function body
         for instr in &instrs {
@@ -96,7 +103,6 @@ pub fn compile_to_jit(
                 _ => {}
             }
         }
-        
         // Emit function body instructions
         for instr in &instrs {
             instr_to_dynasm(instr, ops, &label_map);
@@ -110,8 +116,8 @@ pub fn compile_to_jit(
         );
     }
     
-    // Debug main instructions
-    let (main_instrs, min_offset) = compile_to_instrs(
+    //test
+    let (main_instrs, min_offset) = compile_to_instrs(  // Different variable name!
         &program.main,
         -8,
         &HashMap::new(),
@@ -121,7 +127,7 @@ pub fn compile_to_jit(
         &None
     );
     println!("=== Instructions for main body ===");
-    for instr in &main_instrs {
+    for instr in &main_instrs {  // Use main_instrs here
         println!("{:?}", instr);
     }
 
@@ -136,7 +142,7 @@ pub fn compile_to_jit(
     let input_heap_offset = get_input_heap_offset();
     dynasm!(ops
         ; .arch x64
-        ; mov [r15 + input_heap_offset], rdi
+        ; mov [r15 + input_heap_offset], rdi  // Store input at heap offset
     );
     
     let (instrs, min_offset) = compile_to_instrs(
@@ -149,11 +155,10 @@ pub fn compile_to_jit(
         &None
     );
     
-    // Allocate stack space for local variables in main if needed
-    // Only allocate if we've actually used stack slots (min_offset < -8 means we used [rbp-16] or lower)
-    if min_offset <= -16 {
-        let needed = -min_offset - 8;  // Subtract 8 because -8 is just the starting point
-        let stack_space = ((needed + 15) / 16) * 16;
+    // Allocate stack space for main
+    let needed = -min_offset;
+    let stack_space = if needed <= 0 { 0 } else { ((needed + 15) / 16) * 16 };
+    if stack_space > 0 {
         dynasm!(ops
             ; .arch x64
             ; sub rsp, stack_space as i32
@@ -219,16 +224,33 @@ pub fn compile_to_jit(
         ; ret
     );
 
+    //test
     println!("Label map contents:");
     for (name, _) in &label_map {
         println!("  {}", name);
     }
 
+    // Check each call instruction
     for instr in &instrs {
         if let Instr::ICall(target) = instr {
             println!("Call to: {}, exists: {}", target, label_map.contains_key(target));
         }
     }
+
+// And for main:
+println!("=== Instructions for main body ==="); 
+let (instrs, min_offset) = compile_to_instrs(
+    &program.main,
+    -8,
+    &HashMap::new(),
+    defines,
+    fun_ctx,
+    true,
+    &None
+);
+for instr in &instrs {
+    println!("{:?}", instr);
+}
 }
 
 pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMap<String, dynasmrt::DynamicLabel>) {
@@ -302,7 +324,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             }
         };
     }
-    
     println!("JIT emitting: {:?}", instr);
     match instr {
         Instr::IMov(dest, src) => {
@@ -327,6 +348,7 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                 (Val::Reg(Reg::R9), Val::Reg(Reg::RAX)) => dynasm!(ops; .arch x64; mov r9, rax),
 
                 // RBP-relative loads (supports positive offsets now!)
+                //(Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rax, offset),
                 (Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)) => {
                     eprintln!("DEBUG: Loading from RBP+{}, offset value = {}\n ==========", offset, offset);
                     load_rbp!(rax, offset);
@@ -434,6 +456,17 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             dynasm!(ops; .arch x64; jo =>label);
         },
 
+        // Instr::ICall(label) => {
+        //     if label == "*rax" {
+        //         dynasm!(ops; .arch x64; call rax);
+        //     } 
+        //     else if let Some(&target_label) = label_map.get(label) {
+        //         dynasm!(ops; .arch x64; call =>target_label);
+        //     } 
+        //     else {
+        //         panic!("Unsupported call target: {}", label);
+        //     }
+        // }
         Instr::ICall(label) => {
             if label == "*rax" {
                 dynasm!(ops; .arch x64; call rax);

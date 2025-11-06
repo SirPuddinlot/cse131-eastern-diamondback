@@ -1,13 +1,14 @@
 // src/ast.rs
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Op1 {
     Add1,
     Sub1,
     IsNum,
     IsBool,
+    Print
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Op2 {
     Plus,
     Minus,
@@ -19,7 +20,7 @@ pub enum Op2 {
     LessEqual,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Number(i32),
     Id(String),
@@ -32,11 +33,27 @@ pub enum Expr {
     Block(Vec<Expr>),  
     Set(String, Box<Expr>),  
     Loop(Box<Expr>),    
-    Break(Box<Expr>),   
+    Break(Box<Expr>),  
+    Call(String, Vec<Expr>),  
 }
 
 #[derive(Debug)]
 pub enum ReplEntry {
     Expr(Expr),
     Define(String, Box<Expr>),
+}
+
+
+// diamondback
+#[derive(Debug)]
+pub struct Program {
+    pub defns: Vec<FunDefn>,
+    pub main: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunDefn {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Box<Expr>,
 }
