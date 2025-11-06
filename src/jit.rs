@@ -7,6 +7,136 @@ use crate::instr::*;
 use crate::compiler::compile_to_instrs;
 use std::collections::HashMap as StdHashMap;
 use crate::compiler::get_input_heap_offset;
+pub fn compile_functions_only(
+    program: &Program,
+    ops: &mut Assembler,
+    defines: &mut HashMap<String, i32>,
+    fun_ctx: &crate::compiler::FunContext,
+    label_map: &mut StdHashMap<String, dynasmrt::DynamicLabel>,
+) {
+    // Pre-create labels for all functions
+    for defn in &program.defns {
+        let fun_label = ops.new_dynamic_label();
+        label_map.insert(format!("fun_{}", defn.name), fun_label);
+    }
+    
+    // Pre-create error handler labels
+    let snek_print = ops.new_dynamic_label();
+    let error_overflow = ops.new_dynamic_label();
+    let error_invalid_arg = ops.new_dynamic_label();
+    label_map.insert("_snek_print".to_string(), snek_print);
+    label_map.insert("error_overflow".to_string(), error_overflow);
+    label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
+    
+    // Compile all function definitions with stack-based calling convention
+    for defn in &program.defns {
+        //println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
+
+        let fun_label = label_map[&format!("fun_{}", defn.name)];
+        
+        dynasm!(ops
+            ; .arch x64
+            ; =>fun_label
+            ; push rbp
+            ; mov rbp, rsp
+        );
+        
+        // Build environment: parameters are on caller's stack at [rbp+16], [rbp+24], etc.
+        let mut env = HashMap::new();
+        for (i, param) in defn.params.iter().enumerate() {
+            let offset = 16 + (i as i32 * 8);
+            env = env.update(param.clone(), offset);
+        }
+
+        //println!("=== Compiling function: {} ===", defn.name);
+        //println!("Parameters: {:?}", defn.params);
+        //println!("Body: {:?}", defn.body);
+
+        // Compile function body
+        let (instrs, min_offset) = compile_to_instrs(
+            &defn.body,
+            -8,
+            &env,
+            defines,
+            fun_ctx,
+            false,
+            &None,
+        );
+
+        //println!("=== Instructions for {} body ===", defn.name);
+        // for instr in &instrs {
+        //     println!("{:?}", instr);
+        // }
+        
+        // Allocate stack space for local variables if needed
+        if min_offset < 0 {
+            let needed = -min_offset;
+            let stack_space = ((needed + 15) / 16) * 16;
+            dynasm!(ops
+                ; .arch x64
+                ; sub rsp, stack_space as i32
+            );
+        }
+        
+        // Collect labels used in function body
+        for instr in &instrs {
+            if let Instr::ILabel(label_name) = instr {
+                if !label_map.contains_key(label_name) {
+                    label_map.insert(label_name.clone(), ops.new_dynamic_label());
+                }
+            }
+            match instr {
+                Instr::IJmp(label) | Instr::IJe(label) | Instr::IJne(label) | Instr::IJo(label) => {
+                    if !label_map.contains_key(label) {
+                        label_map.insert(label.clone(), ops.new_dynamic_label());
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Emit function body instructions
+        for instr in &instrs {
+            instr_to_dynasm(instr, ops, &label_map);
+        }
+        
+        dynasm!(ops
+            ; .arch x64
+            ; mov rsp, rbp
+            ; pop rbp
+            ; ret
+        );
+    }
+    
+    // Compile error handlers
+    let snek_error_addr = crate::snek_error as *const () as i64;
+    let snek_print_addr = crate::_snek_print as *const () as i64;
+
+    dynasm!(ops
+        ; .arch x64
+        ; =>snek_print
+        ; push rbp
+        ; mov rbp, rsp
+        ; mov rax, QWORD snek_print_addr as _
+        ; call rax
+        ; pop rbp
+        ; ret
+    );
+    
+    dynasm!(ops
+        ; .arch x64
+        ; =>error_overflow
+        ; mov rdi, 1
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; ret
+        ; =>error_invalid_arg
+        ; mov rdi, 2
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; ret
+    );
+}
 
 pub fn compile_to_jit(
     program: &Program, 
@@ -32,7 +162,7 @@ pub fn compile_to_jit(
     
     // Compile all function definitions with stack-based calling convention
     for defn in &program.defns {
-        println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
+       //println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
 
         let fun_label = label_map[&format!("fun_{}", defn.name)];
         
@@ -50,9 +180,9 @@ pub fn compile_to_jit(
             env = env.update(param.clone(), offset);
         }
 
-        println!("=== Compiling function: {} ===", defn.name);
-        println!("Parameters: {:?}", defn.params);
-        println!("Body: {:?}", defn.body);
+        // println!("=== Compiling function: {} ===", defn.name);
+        // println!("Parameters: {:?}", defn.params);
+        // println!("Body: {:?}", defn.body);
 
         // Compile function body
         let (instrs, min_offset) = compile_to_instrs(
@@ -65,10 +195,10 @@ pub fn compile_to_jit(
             &None,
         );
 
-        println!("=== Instructions for {} body ===", defn.name);
-        for instr in &instrs {
-            println!("{:?}", instr);
-        }
+        // println!("=== Instructions for {} body ===", defn.name);
+        // for instr in &instrs {
+        //     println!("{:?}", instr);
+        // }
         
         // Allocate stack space for local variables if needed
         if min_offset < 0 {
@@ -120,10 +250,10 @@ pub fn compile_to_jit(
         true,
         &None
     );
-    println!("=== Instructions for main body ===");
-    for instr in &main_instrs {
-        println!("{:?}", instr);
-    }
+    // println!("=== Instructions for main body ===");
+    // for instr in &main_instrs {
+    //     println!("{:?}", instr);
+    // }
 
     // Compile main
     dynasm!(ops
@@ -219,16 +349,16 @@ pub fn compile_to_jit(
         ; ret
     );
 
-    println!("Label map contents:");
-    for (name, _) in &label_map {
-        println!("  {}", name);
-    }
+    // println!("Label map contents:");
+    // for (name, _) in &label_map {
+    //     println!("  {}", name);
+    // }
 
-    for instr in &instrs {
-        if let Instr::ICall(target) = instr {
-            println!("Call to: {}, exists: {}", target, label_map.contains_key(target));
-        }
-    }
+    // for instr in &instrs {
+    //     if let Instr::ICall(target) = instr {
+    //         println!("Call to: {}, exists: {}", target, label_map.contains_key(target));
+    //     }
+    // }
 }
 
 pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMap<String, dynasmrt::DynamicLabel>) {
@@ -303,7 +433,7 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
         };
     }
     
-    println!("JIT emitting: {:?}", instr);
+    // println!("JIT emitting: {:?}", instr);
     match instr {
         Instr::IMov(dest, src) => {
             match (dest, src) {
@@ -328,7 +458,7 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
 
                 // RBP-relative loads (supports positive offsets now!)
                 (Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)) => {
-                    eprintln!("DEBUG: Loading from RBP+{}, offset value = {}\n ==========", offset, offset);
+                    // eprintln!("DEBUG: Loading from RBP+{}, offset value = {}\n ==========", offset, offset);
                     load_rbp!(rax, offset);
                 },
                 (Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rcx, offset),

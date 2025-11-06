@@ -23,7 +23,6 @@ our_code_starts_here:
   push rbp
   mov rbp, rsp
   mov [r15 + 0], rdi
-  sub rsp, 16
   mov rax, 10
   push rax
   call fun_twoparams
