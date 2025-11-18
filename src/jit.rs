@@ -7,6 +7,67 @@ use crate::instr::*;
 use crate::compiler::compile_to_instrs;
 use std::collections::HashMap as StdHashMap;
 use crate::compiler::get_input_heap_offset;
+// In jit.rs - Simplified error handlers since catch_unwind handles everything
+
+fn compile_error_handlers_for_repl(
+    ops: &mut Assembler,
+    label_map: &StdHashMap<String, dynasmrt::DynamicLabel>,
+) 
+{
+    let snek_error_addr = crate::helpers::snek_error as *const () as i64;
+    let snek_print_addr = crate::helpers::_snek_print as *const () as i64;
+    
+    let snek_print = label_map["_snek_print"];
+    let error_overflow = label_map["error_overflow"];
+    let error_invalid_arg = label_map["error_invalid_argument"];
+    let error_bad_cast = label_map["error_bad_cast"];
+
+    // Print handler
+    dynasm!(ops
+        ; .arch x64
+        ; =>snek_print
+        ; push rbp
+        ; mov rbp, rsp
+        ; mov rax, QWORD snek_print_addr as _
+        ; call rax
+        ; pop rbp
+        ; ret
+    );
+    
+    // Error handlers - jumped to from error conditions
+    // Call snek_error (which uses catch_unwind internally)
+    // Then restore stack and return with error sentinel value
+    dynasm!(ops
+        ; .arch x64
+        ; =>error_overflow
+        ; mov rdi, 1
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; mov rax, 0  // Return sentinel value
+        ; mov rsp, rbp
+        ; pop rbp
+        ; ret
+        
+        ; =>error_invalid_arg
+        ; mov rdi, 2
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; mov rax, 0
+        ; mov rsp, rbp
+        ; pop rbp
+        ; ret
+        
+        ; =>error_bad_cast
+        ; mov rdi, 3
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; mov rax, 0
+        ; mov rsp, rbp
+        ; pop rbp
+        ; ret
+    );
+}
+
 pub fn compile_functions_only(
     program: &Program,
     ops: &mut Assembler,
@@ -30,10 +91,8 @@ pub fn compile_functions_only(
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);
     
-    // Compile all function definitions with stack-based calling convention
+    // Compile all function definitions
     for defn in &program.defns {
-        //println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
-
         let fun_label = label_map[&format!("fun_{}", defn.name)];
         
         dynasm!(ops
@@ -43,18 +102,12 @@ pub fn compile_functions_only(
             ; mov rbp, rsp
         );
         
-        // Build environment: parameters are on caller's stack at [rbp+16], [rbp+24], etc.
         let mut env = HashMap::new();
         for (i, param) in defn.params.iter().enumerate() {
             let offset = 16 + (i as i32 * 8);
             env = env.update(param.clone(), offset);
         }
 
-        //println!("=== Compiling function: {} ===", defn.name);
-        //println!("Parameters: {:?}", defn.params);
-        //println!("Body: {:?}", defn.body);
-
-        // Compile function body
         let (instrs, min_offset) = compile_to_instrs(
             &defn.body,
             -8,
@@ -64,13 +117,7 @@ pub fn compile_functions_only(
             false,
             &None,
         );
-
-        //println!("=== Instructions for {} body ===", defn.name);
-        // for instr in &instrs {
-        //     println!("{:?}", instr);
-        // }
         
-        // Allocate stack space for local variables if needed
         if min_offset < 0 {
             let needed = -min_offset;
             let stack_space = ((needed + 15) / 16) * 16;
@@ -80,7 +127,6 @@ pub fn compile_functions_only(
             );
         }
         
-        // Collect labels used in function body
         for instr in &instrs {
             if let Instr::ILabel(label_name) = instr {
                 if !label_map.contains_key(label_name) {
@@ -97,7 +143,6 @@ pub fn compile_functions_only(
             }
         }
         
-        // Emit function body instructions
         for instr in &instrs {
             instr_to_dynasm(instr, ops, &label_map);
         }
@@ -111,38 +156,7 @@ pub fn compile_functions_only(
     }
     
     // Compile error handlers
-    let snek_error_addr = crate::snek_error as *const () as i64;
-    let snek_print_addr = crate::_snek_print as *const () as i64;
-
-    dynasm!(ops
-        ; .arch x64
-        ; =>snek_print
-        ; push rbp
-        ; mov rbp, rsp
-        ; mov rax, QWORD snek_print_addr as _
-        ; call rax
-        ; pop rbp
-        ; ret
-    );
-    
-    dynasm!(ops
-        ; .arch x64
-        ; =>error_overflow
-        ; mov rdi, 1
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-        ; =>error_invalid_arg
-        ; mov rdi, 2
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-        ; =>error_bad_cast
-        ; mov rdi, 3
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-    );
+    compile_error_handlers_for_repl(ops, label_map);
 }
 
 pub fn compile_to_jit(
@@ -604,3 +618,4 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
         _ => panic!("Unsupported instruction in JIT: {:?}", instr),
     }
 }
+

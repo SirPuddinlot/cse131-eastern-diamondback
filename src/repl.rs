@@ -53,6 +53,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
     let snek_error_addr = crate::helpers::snek_error as *const () as i64;
     let snek_print_addr = crate::helpers::_snek_print as *const () as i64;
 
+    // Print handler - this is CALLED so just ret is fine
     dynasm!(ops
         ; .arch x64
         ; =>snek_print
@@ -64,22 +65,35 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
         ; ret
     );
     
+    // Error handlers - these are JUMPED TO (not called)
+    // So they need to restore the stack frame before returning
     dynasm!(ops
         ; .arch x64
         ; =>error_overflow
         ; mov rdi, 1
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
-        ; ret
+        ; mov rax, 0          // Set sentinel return value
+        ; mov rsp, rbp        // Restore stack pointer
+        ; pop rbp             // Restore base pointer
+        ; ret                 // Return to caller
+        
         ; =>error_invalid_arg
         ; mov rdi, 2
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
+        ; mov rax, 0
+        ; mov rsp, rbp
+        ; pop rbp
         ; ret
+        
         ; =>error_bad_cast
         ; mov rdi, 3
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
+        ; mov rax, 0
+        ; mov rsp, rbp
+        ; pop rbp
         ; ret
     );
     
@@ -498,21 +512,19 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 defines = defines.update(name.clone(), heap_offset);
                 println!("{} defined", name);
             }
+           // In repl.rs - update the ReplEntry::Expr case
+
             ReplEntry::Expr(expr) => {
                 // Typecheck if enabled
                 if typecheck {
                     let mut type_env = HashMap::new();
-                    // Add input with type Bool (false in REPL)
                     type_env = type_env.update("input".to_string(), Type::Bool);
-                    // Add existing defines to type environment
                     for (def_name, def_type) in &define_types {
                         type_env = type_env.update(def_name.clone(), def_type.clone());
                     }
                     
                     match typecheck_expr(&expr, &type_env, &functions) {
-                        Ok(_t) => {
-                            // Type check passed
-                        }
+                        Ok(_t) => {}
                         Err(e) => {
                             println!("{}", e);
                             continue;
@@ -520,10 +532,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     }
                 }
                 
-                // Build function context
                 let fun_ctx = FunContext::new(&functions);
-                
-                // Create a program with the expression as main
                 let program = Program {
                     defns: functions.clone(),
                     main: expr,
@@ -531,7 +540,6 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 
                 let start = ops.offset();
                 
-                // Set up function prologue and heap pointer
                 dynasm!(ops
                     ; .arch x64
                     ; push rbp
@@ -539,14 +547,12 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     ; mov r15, QWORD heap_ptr as _
                 );
                 
-                // Store input value (always false/3 in REPL)
                 let input_heap_offset = get_input_heap_offset();
                 dynasm!(ops
                     ; .arch x64
                     ; mov QWORD [r15 + input_heap_offset], 3  // false
                 );
                 
-                // Compile the expression
                 let (instrs, min_offset) = match std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| {
                         crate::compiler::compile_to_instrs(
@@ -567,7 +573,6 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     }
                 };
                 
-                // Allocate stack space if needed
                 if min_offset <= -16 {
                     let needed = -min_offset - 8;
                     let stack_space = ((needed + 15) / 16) * 16;
@@ -577,7 +582,6 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     );
                 }
                 
-                // Pre-create labels
                 for instr in &instrs {
                     if let crate::instr::Instr::ILabel(label_name) = instr {
                         if !label_map.contains_key(label_name) {
@@ -595,7 +599,6 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     }
                 }
                 
-                // Emit instructions
                 for instr in &instrs {
                     instr_to_dynasm(instr, &mut ops, &label_map);
                 }
@@ -618,7 +621,17 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 let reader = ops.reader();
                 let buf = reader.lock();
                 let jitted_fn: extern "C" fn() -> i64 = unsafe { mem::transmute(buf.ptr(start)) };
+                
+                // Clear error flag before execution
+                crate::helpers::HAS_ERROR.store(false, Ordering::SeqCst);
+                
                 let result = jitted_fn();
+                
+                // Check if there was an error
+                if let Some(error_msg) = crate::helpers::check_error() {
+                    println!("{}", error_msg);
+                    continue;
+                }
                 
                 print_result(result);
             }
