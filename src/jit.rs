@@ -7,13 +7,13 @@ use crate::instr::*;
 use crate::compiler::compile_to_instrs;
 use std::collections::HashMap as StdHashMap;
 use crate::compiler::get_input_heap_offset;
-// In jit.rs - Simplified error handlers since catch_unwind handles everything
 
-fn compile_error_handlers_for_repl(
+/// Compile error handlers for JIT execution
+/// This includes print handler and runtime error handlers (overflow, invalid argument, bad cast)
+pub fn compile_error_handlers(
     ops: &mut Assembler,
     label_map: &StdHashMap<String, dynasmrt::DynamicLabel>,
-) 
-{
+) {
     let snek_error_addr = crate::helpers::snek_error as *const () as i64;
     let snek_print_addr = crate::helpers::_snek_print as *const () as i64;
     
@@ -22,7 +22,7 @@ fn compile_error_handlers_for_repl(
     let error_invalid_arg = label_map["error_invalid_argument"];
     let error_bad_cast = label_map["error_bad_cast"];
 
-    // Print handler
+    // Print handler - called via 'call' instruction, so 'ret' is correct
     dynasm!(ops
         ; .arch x64
         ; =>snek_print
@@ -34,19 +34,17 @@ fn compile_error_handlers_for_repl(
         ; ret
     );
     
-    // Error handlers - jumped to from error conditions
-    // Call snek_error (which uses catch_unwind internally)
-    // Then restore stack and return with error sentinel value
+    // Error handlers - jumped to via 'jo', 'jne', so must restore stack frame
     dynasm!(ops
         ; .arch x64
         ; =>error_overflow
         ; mov rdi, 1
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
-        ; mov rax, 0  // Return sentinel value
-        ; mov rsp, rbp
-        ; pop rbp
-        ; ret
+        ; mov rax, 0          // Return sentinel value
+        ; mov rsp, rbp        // Restore stack pointer
+        ; pop rbp             // Restore base pointer
+        ; ret                 // Return to caller
         
         ; =>error_invalid_arg
         ; mov rdi, 2
@@ -155,8 +153,8 @@ pub fn compile_functions_only(
         );
     }
     
-    // Compile error handlers
-    compile_error_handlers_for_repl(ops, label_map);
+    // Compile error handlers (now using shared function)
+    compile_error_handlers(ops, label_map);
 }
 
 pub fn compile_to_jit(
@@ -182,10 +180,9 @@ pub fn compile_to_jit(
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);
-    // Compile all function definitions with stack-based calling convention
+    
+    // Compile all function definitions
     for defn in &program.defns {
-       //println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
-
         let fun_label = label_map[&format!("fun_{}", defn.name)];
         
         dynasm!(ops
@@ -195,18 +192,12 @@ pub fn compile_to_jit(
             ; mov rbp, rsp
         );
         
-        // Build environment: parameters are on caller's stack at [rbp+16], [rbp+24], etc.
         let mut env = HashMap::new();
         for (i, param) in defn.params.iter().enumerate() {
             let offset = 16 + (i as i32 * 8);
             env = env.update(param.clone(), offset);
         }
 
-        // println!("=== Compiling function: {} ===", defn.name);
-        // println!("Parameters: {:?}", defn.params);
-        // println!("Body: {:?}", defn.body);
-
-        // Compile function body
         let (instrs, min_offset) = compile_to_instrs(
             &defn.body,
             -8,
@@ -216,13 +207,7 @@ pub fn compile_to_jit(
             false,
             &None,
         );
-
-        // println!("=== Instructions for {} body ===", defn.name);
-        // for instr in &instrs {
-        //     println!("{:?}", instr);
-        // }
         
-        // Allocate stack space for local variables if needed
         if min_offset < 0 {
             let needed = -min_offset;
             let stack_space = ((needed + 15) / 16) * 16;
@@ -232,7 +217,6 @@ pub fn compile_to_jit(
             );
         }
         
-        // Collect labels used in function body
         for instr in &instrs {
             if let Instr::ILabel(label_name) = instr {
                 if !label_map.contains_key(label_name) {
@@ -249,7 +233,6 @@ pub fn compile_to_jit(
             }
         }
         
-        // Emit function body instructions
         for instr in &instrs {
             instr_to_dynasm(instr, ops, &label_map);
         }
@@ -261,21 +244,6 @@ pub fn compile_to_jit(
             ; ret
         );
     }
-    
-    // Debug main instructions
-    let (main_instrs, min_offset) = compile_to_instrs(
-        &program.main,
-        -8,
-        &HashMap::new(),
-        defines,
-        fun_ctx,
-        true,
-        &None
-    );
-    // println!("=== Instructions for main body ===");
-    // for instr in &main_instrs {
-    //     println!("{:?}", instr);
-    // }
 
     // Compile main
     dynasm!(ops
@@ -284,7 +252,6 @@ pub fn compile_to_jit(
         ; mov rbp, rsp
     );
     
-    // Store input to heap at the beginning (R15 points to heap)
     let input_heap_offset = get_input_heap_offset();
     dynasm!(ops
         ; .arch x64
@@ -301,10 +268,8 @@ pub fn compile_to_jit(
         &None
     );
     
-    // Allocate stack space for local variables in main if needed
-    // Only allocate if we've actually used stack slots (min_offset < -8 means we used [rbp-16] or lower)
     if min_offset <= -16 {
-        let needed = -min_offset - 8;  // Subtract 8 because -8 is just the starting point
+        let needed = -min_offset - 8;
         let stack_space = ((needed + 15) / 16) * 16;
         dynasm!(ops
             ; .arch x64
@@ -312,7 +277,7 @@ pub fn compile_to_jit(
         );
     }
 
-    // First pass: collect all labels from main instructions
+    // Collect all labels from main instructions
     for instr in &instrs {
         if let Instr::ILabel(label_name) = instr {
             if !label_map.contains_key(label_name) {
@@ -329,7 +294,7 @@ pub fn compile_to_jit(
         }
     }
     
-    // Second pass: emit main instructions
+    // Emit main instructions
     for instr in &instrs {
         instr_to_dynasm(instr, ops, &label_map);
     }
@@ -342,39 +307,8 @@ pub fn compile_to_jit(
         ; ret
     );
     
-    // Error handlers
-    let snek_error_addr = crate::snek_error as *const () as i64;
-    let snek_print_addr = crate::_snek_print as *const () as i64;
-
-    dynasm!(ops
-        ; .arch x64
-        ; =>snek_print
-        ; push rbp
-        ; mov rbp, rsp
-        ; mov rax, QWORD snek_print_addr as _
-        ; call rax
-        ; pop rbp
-        ; ret
-    );
-    
-    dynasm!(ops
-        ; .arch x64
-        ; =>error_overflow
-        ; mov rdi, 1
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-        ; =>error_invalid_arg
-        ; mov rdi, 2
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-        ; =>error_bad_cast
-        ; mov rdi, 3
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; ret
-    );
+    // Compile error handlers (now using shared function)
+    compile_error_handlers(ops, &label_map);
 }
 
 pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMap<String, dynasmrt::DynamicLabel>) {
@@ -449,11 +383,9 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
         };
     }
     
-    // println!("JIT emitting: {:?}", instr);
     match instr {
         Instr::IMov(dest, src) => {
             match (dest, src) {
-                // Immediate to register
                 (Val::Reg(Reg::RAX), Val::Imm(n)) => dynasm!(ops; .arch x64; mov rax, QWORD *n as i64),
                 (Val::Reg(Reg::RCX), Val::Imm(n)) => dynasm!(ops; .arch x64; mov rcx, QWORD *n as i64),
                 (Val::Reg(Reg::RDI), Val::Imm(n)) => dynasm!(ops; .arch x64; mov rdi, QWORD *n as i64),
@@ -462,7 +394,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                 (Val::Reg(Reg::R8), Val::Imm(n)) => dynasm!(ops; .arch x64; mov r8, QWORD *n as i64),
                 (Val::Reg(Reg::R9), Val::Imm(n)) => dynasm!(ops; .arch x64; mov r9, QWORD *n as i64),
 
-                // Register to register
                 (Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; mov rax, rcx),
                 (Val::Reg(Reg::RAX), Val::Reg(Reg::RDI)) => dynasm!(ops; .arch x64; mov rax, rdi),
                 (Val::Reg(Reg::RCX), Val::Reg(Reg::RAX)) => dynasm!(ops; .arch x64; mov rcx, rax),
@@ -472,11 +403,7 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                 (Val::Reg(Reg::R8), Val::Reg(Reg::RAX)) => dynasm!(ops; .arch x64; mov r8, rax),
                 (Val::Reg(Reg::R9), Val::Reg(Reg::RAX)) => dynasm!(ops; .arch x64; mov r9, rax),
 
-                // RBP-relative loads (supports positive offsets now!)
-                (Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)) => {
-                    // eprintln!("DEBUG: Loading from RBP+{}, offset value = {}\n ==========", offset, offset);
-                    load_rbp!(rax, offset);
-                },
+                (Val::Reg(Reg::RAX), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rax, offset),
                 (Val::Reg(Reg::RCX), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rcx, offset),
                 (Val::Reg(Reg::RDI), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rdi, offset),
                 (Val::Reg(Reg::RSI), Val::RegOffset(Reg::RBP, offset)) => load_rbp!(rsi, offset),
@@ -484,7 +411,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                 (Val::Reg(Reg::R8),  Val::RegOffset(Reg::RBP, offset)) => load_rbp!(r8,  offset),
                 (Val::Reg(Reg::R9),  Val::RegOffset(Reg::RBP, offset)) => load_rbp!(r9,  offset),
 
-                // RBP-relative stores (supports positive offsets now!)
                 (Val::RegOffset(Reg::RBP, offset), Val::Reg(Reg::RAX)) => store_rbp!(offset, rax),
                 (Val::RegOffset(Reg::RBP, offset), Val::Reg(Reg::RDI)) => store_rbp!(offset, rdi),
                 (Val::RegOffset(Reg::RBP, offset), Val::Reg(Reg::RSI)) => store_rbp!(offset, rsi),
@@ -493,7 +419,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
                 (Val::RegOffset(Reg::RBP, offset), Val::Reg(Reg::R8))  => store_rbp!(offset, r8),
                 (Val::RegOffset(Reg::RBP, offset), Val::Reg(Reg::R9))  => store_rbp!(offset, r9),
 
-                // Heap (R15-relative)
                 (Val::Reg(Reg::RAX), Val::RegOffset(Reg::R15, offset)) =>
                     dynasm!(ops; .arch x64; mov rax, [r15 + *offset]),
                 (Val::RegOffset(Reg::R15, offset), Val::Reg(Reg::RAX)) =>
@@ -505,7 +430,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             }
         }
 
-        // === Binary arithmetic ===
         Instr::IAdd(dest, src) => match (dest, src) {
             (Val::Reg(Reg::RAX), Val::Imm(n)) => dynasm!(ops; .arch x64; add rax, *n as i32),
             (Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; add rax, rcx),
@@ -528,7 +452,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             _ => panic!("Unsupported imul pattern in JIT: {:?} *= {:?}", dest, src),
         },
 
-        // === Comparison and test ===
         Instr::ICmp(dest, src) => match (dest, src) {
             (Val::Reg(Reg::RAX), Val::Imm(n)) => dynasm!(ops; .arch x64; cmp rax, *n as i32),
             (Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmp rax, rcx),
@@ -553,7 +476,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             _ => panic!("Unsupported sar pattern in JIT: {:?} >> {:?}", dest, src),
         },
 
-        // === Conditional moves ===
         Instr::ICMovE(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmove rax, rcx),
         Instr::ICMovNE(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmovne rax, rcx),
         Instr::ICMovG(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmovg rax, rcx),
@@ -561,7 +483,6 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
         Instr::ICMovL(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmovl rax, rcx),
         Instr::ICMovLE(Val::Reg(Reg::RAX), Val::Reg(Reg::RCX)) => dynasm!(ops; .arch x64; cmovle rax, rcx),
 
-        // === Control flow ===
         Instr::ILabel(label_name) => {
             if let Some(&label) = label_map.get(label_name) {
                 dynasm!(ops; .arch x64; =>label);
@@ -584,14 +505,12 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
             if label == "*rax" {
                 dynasm!(ops; .arch x64; call rax);
             } else if label.starts_with("fun_") {
-                // Handle function calls specifically
                 if let Some(&target_label) = label_map.get(label) {
                     dynasm!(ops; .arch x64; call =>target_label);
                 } else {
                     panic!("Unknown function call: {}", label);
                 }
             } else if let Some(&target_label) = label_map.get(label) {
-                // Other labels (like error handlers)
                 dynasm!(ops; .arch x64; call =>target_label);
             } else {
                 panic!("Unsupported call target: {}", label);
@@ -618,4 +537,3 @@ pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMa
         _ => panic!("Unsupported instruction in JIT: {:?}", instr),
     }
 }
-

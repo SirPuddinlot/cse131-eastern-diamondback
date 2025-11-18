@@ -90,19 +90,27 @@ fn main() -> std::io::Result<()> {
     let typecheck_mode = flag.starts_with("-t");
     
     if typecheck_mode {
-        let input_type = match flag.as_str() {
-            "-t" | "-tc" => {
-                // No input provided, input has type Any
-                None
-            }
-            "-te" | "-tg" => {
-                // Parse input to determine type
-                let input_str = if args.len() > 3 { &args[3] } else { "false" };
-                let input = parse_input(input_str);
-                Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
-            }
-            _ => None
-        };
+        if typecheck_mode {
+            let input_type = match flag.as_str() {
+                "-t" | "-tc" => {
+                    // No input provided, input has type Any
+                    None
+                }
+                "-te" => {
+                    // For -te: input is at args[3]
+                    let input_str = if args.len() > 3 { &args[3] } else { "false" };
+                    let input = parse_input(input_str);
+                    Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
+                }
+                "-tg" => {
+                    // For -tg: format is -tg <prog>.snek <prog>.s <input>
+                    // So input is at args[4]
+                    let input_str = if args.len() > 4 { &args[4] } else { "false" };
+                    let input = parse_input(input_str);
+                    Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
+                }
+                _ => None
+            };
         
         // Run typechecker
         match typecheck_program(&prog, input_type) {
@@ -119,6 +127,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
         }
+       }
     }
     
     match flag.as_str() {
@@ -232,24 +241,31 @@ extern _snek_print
             print_result(result_val);
         }
         "-g" | "-tg" => {
-            // Both: JIT execution and AOT compilation
-            let input_str = if args.len() > 3 { &args[3] } else { "false" };
+            // Both: JIT execution and write assembly to file
+            // Format: -g/-tg <prog>.snek <prog>.s <input>
+            if args.len() < 4 {
+                eprintln!("Error: output file required for -g/-tg");
+                std::process::exit(1);
+            }
+
+            let out_name = &args[3];
+            let input_str = if args.len() > 4 { &args[4] } else { "false" };
             let input = parse_input(input_str);
-            
+
             // === JIT COMPILATION AND EXECUTION ===
             let mut __ops__ = dynasmrt::x64::Assembler::new().unwrap();
             let heap: Vec<i64> = vec![0; 128 * 1024];
             let heap_ptr = heap.as_ptr() as i64;
-            
+
             let mut __fun_ctx__ = FunContext::new(&prog.defns);
             let mut __label_map__ = std::collections::HashMap::new();
-            
+
             // Compile function definitions and error handlers
             compile_functions_only(&prog, &mut __ops__, &mut HashMap::new(), &mut __fun_ctx__, &mut __label_map__);
-            
+
             // Capture the offset - this is where main starts
             let start = __ops__.offset();
-            
+
             // Set up heap pointer and function prologue
             dynasm!(__ops__
                 ; .arch x64
@@ -257,14 +273,14 @@ extern _snek_print
                 ; mov rbp, rsp
                 ; mov r15, QWORD heap_ptr as _
             );
-            
+
             // Store input to heap
             let input_heap_offset = get_input_heap_offset();
             dynasm!(__ops__
                 ; .arch x64
                 ; mov [r15 + input_heap_offset], rdi
             );
-            
+
             // Compile main expression
             let (main_instrs, min_offset) = crate::compiler::compile_to_instrs(
                 &prog.main,
@@ -275,14 +291,14 @@ extern _snek_print
                 true,
                 &None,
             );
-            
+
             // Allocate stack space if needed
             if min_offset <= -16 {
                 let needed = -min_offset - 8;
                 let stack_space = ((needed + 15) / 16) * 16;
                 dynasm!(__ops__; .arch x64; sub rsp, stack_space as i32);
             }
-            
+
             // Pre-create labels for main
             for instr in &main_instrs {
                 if let Instr::ILabel(label_name) = instr {
@@ -299,12 +315,12 @@ extern _snek_print
                     _ => {}
                 }
             }
-            
+
             // Emit main instructions
             for instr in &main_instrs {
                 crate::jit::instr_to_dynasm(instr, &mut __ops__, &__label_map__);
             }
-            
+
             // Main epilogue
             dynasm!(__ops__
                 ; .arch x64
@@ -312,25 +328,34 @@ extern _snek_print
                 ; pop rbp
                 ; ret
             );
-            
+
             // Execute JIT
             let buf = __ops__.finalize().unwrap();
             let jitted_fn: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(buf.ptr(start)) };
             let result_val = jitted_fn(input);
-            
+
             std::mem::forget(heap);
-            
+
             println!("JIT Result: ");
             print_result(result_val);
-            
+
             // === AOT COMPILATION OUTPUT ===
-            println!("\n=== Generated Assembly ===");
             let result = compile(&prog);
             let asm_program = format!(
-                "section .text\nglobal our_code_starts_here\nextern snek_error\nextern _snek_print\n\n{}",
+                "section .text
+global our_code_starts_here
+extern snek_error
+extern _snek_print
+
+{}",
                 result
             );
+            println!("\n=== Generated Assembly ===");
             println!("{}", asm_program);
+            let mut out_file = File::create(out_name)?;
+            out_file.write_all(asm_program.as_bytes())?;
+
+            println!("Assembly written to: {}", out_name);
         }
         _ => {
             eprintln!("Error: Unknown flag '{}'", flag);

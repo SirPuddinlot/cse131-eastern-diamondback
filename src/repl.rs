@@ -49,53 +49,8 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);
     
-    // Compile error handlers once at the start
-    let snek_error_addr = crate::helpers::snek_error as *const () as i64;
-    let snek_print_addr = crate::helpers::_snek_print as *const () as i64;
-
-    // Print handler - this is CALLED so just ret is fine
-    dynasm!(ops
-        ; .arch x64
-        ; =>snek_print
-        ; push rbp
-        ; mov rbp, rsp
-        ; mov rax, QWORD snek_print_addr as _
-        ; call rax
-        ; pop rbp
-        ; ret
-    );
-    
-    // Error handlers - these are JUMPED TO (not called)
-    // So they need to restore the stack frame before returning
-    dynasm!(ops
-        ; .arch x64
-        ; =>error_overflow
-        ; mov rdi, 1
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; mov rax, 0          // Set sentinel return value
-        ; mov rsp, rbp        // Restore stack pointer
-        ; pop rbp             // Restore base pointer
-        ; ret                 // Return to caller
-        
-        ; =>error_invalid_arg
-        ; mov rdi, 2
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; mov rax, 0
-        ; mov rsp, rbp
-        ; pop rbp
-        ; ret
-        
-        ; =>error_bad_cast
-        ; mov rdi, 3
-        ; mov rax, QWORD snek_error_addr as _
-        ; call rax
-        ; mov rax, 0
-        ; mov rsp, rbp
-        ; pop rbp
-        ; ret
-    );
+    // Compile error handlers once at the start using shared function
+    compile_error_handlers(&mut ops, &label_map);
     
     ops.commit().unwrap();
     
@@ -512,8 +467,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 defines = defines.update(name.clone(), heap_offset);
                 println!("{} defined", name);
             }
-           // In repl.rs - update the ReplEntry::Expr case
-
+           
             ReplEntry::Expr(expr) => {
                 // Typecheck if enabled
                 if typecheck {

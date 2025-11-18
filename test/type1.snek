@@ -1,1 +1,11 @@
-(+ input 1)
+(fun (even? n) 
+  (if (= (cast Num n) 0)
+    true
+    (odd? (- (cast Num n) 1))))
+
+(fun (odd? n)
+  (if (= (cast Num n) 0)
+    false
+    (even? (- (cast Num n) 1))))
+
+(even? input)
