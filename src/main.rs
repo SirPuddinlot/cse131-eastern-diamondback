@@ -6,90 +6,128 @@ mod compiler;
 mod jit;
 mod repl;
 mod helpers;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+mod typechecker;
 
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use im::HashMap;
 use dynasmrt::*;
-use std::mem;
-use sexp::Sexp;
+use capstone::prelude::*;
+
 use crate::compiler::FunContext;
 use crate::compiler::get_input_heap_offset;
 use crate::instr::Instr;
 use crate::jit::compile_functions_only;
-use crate::parser::parse_expr;
 use crate::compiler::compile;
-use crate::jit::compile_to_jit;
 use crate::parser::parse_program;
-// use crate::repl::run_repl;
 use crate::helpers::*;
 use crate::repl::run_repl;
+use crate::typechecker::*;
+use crate::ast::*;
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <-c|-e|-g|-i> <input.snek> [output.s]", args[0]);
+        eprintln!("Usage: {} <flag> <input.snek> [output.s/input]", args[0]);
+        eprintln!("Flags:");
         eprintln!("  -c: Compile to assembly file (requires output file)");
         eprintln!("  -e: Execute directly using JIT compilation");
         eprintln!("  -g: Do both - execute and generate assembly");
         eprintln!("  -i: Interactive REPL mode");
+        eprintln!("  -t: Typecheck only and print type");
+        eprintln!("  -tc: Typecheck and compile to assembly");
+        eprintln!("  -te: Typecheck and execute with JIT");
+        eprintln!("  -tg: Typecheck and do both (execute + generate)");
+        eprintln!("  -ti: Interactive REPL with typechecking");
         std::process::exit(1);
     }
 
     let flag = &args[1];
     
+    // Handle REPL modes
     match flag.as_str() {
         "-i" => {
-            // REPL mode
-            //println!("REPL flag is before running: {}", REPL.load(Ordering::SeqCst));
-
-            REPL.store(true, Ordering::SeqCst);
-            // println!("REPL flag is after: {}", REPL.load(Ordering::SeqCst));
-
-            return run_repl();
+            return run_repl(false); // No typechecking
+        }
+        "-ti" => {
+            return run_repl(true); // With typechecking
         }
         _ => {}
     }
 
     if args.len() < 3 {
-        eprintln!("Usage: {} <-c|-e|-g> <input.cobra> [arg]", args[0]);
-        eprintln!("  -c: Compile to assembly file");
-        eprintln!("  -e: Execute directly using JIT compilation");
-        eprintln!("  -g: Do both - execute and generate assembly");
+        eprintln!("Usage: {} <flag> <input.snek> [output.s/input]", args[0]);
         std::process::exit(1);
     }
 
-    let flag = &args[1];
     let in_name = &args[2];
     
     let mut in_file = File::open(in_name)?;
     let mut in_contents = String::new();
     in_file.read_to_string(&mut in_contents)?;
+    
     // Trim leading/trailing whitespace
     let trimmed = in_contents.trim();
 
     // Detect if it starts and ends with '(' … ')' (i.e., already a top-level list)
-    let wrapped_source = if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        trimmed.to_string()
-    } else {
-        // Wrap in parentheses
-        format!("({})", trimmed)
-    };
+    let wrapped_source = 
+        if trimmed.starts_with("((") && trimmed.ends_with("))") {
+            trimmed.to_string()
+        } 
+        else {
+            format!("({})", trimmed)
+        };    
 
     let sexp = sexp::parse(&wrapped_source).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Parse error: {}", e))
     })?;
 
     let prog = parse_program(&sexp);
+
+    // Determine if we're in typecheck mode and get input type if needed
+    let typecheck_mode = flag.starts_with("-t");
     
+    if typecheck_mode {
+        let input_type = match flag.as_str() {
+            "-t" | "-tc" => {
+                // No input provided, input has type Any
+                None
+            }
+            "-te" | "-tg" => {
+                // Parse input to determine type
+                let input_str = if args.len() > 3 { &args[3] } else { "false" };
+                let input = parse_input(input_str);
+                Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
+            }
+            _ => None
+        };
+        
+        // Run typechecker
+        match typecheck_program(&prog, input_type) {
+            Ok(t) => {
+                if flag == "-t" {
+                    // Just print the type and exit
+                    println!("{:?}", t);
+                    return Ok(());
+                }
+                // For other -t* flags, continue to compilation/execution
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+    }
     
     match flag.as_str() {
-        "-c" => {
+        "-c" | "-tc" => {
             // AOT compilation only
+            if args.len() < 4 {
+                eprintln!("Error: output file required for -c/-tc");
+                std::process::exit(1);
+            }
             let out_name = &args[3];
             let result = compile(&prog);
             let asm_program = format!(
@@ -101,11 +139,11 @@ extern _snek_print
 {}",
                 result
             );
-            //println!("{}", asm_program);
             let mut out_file = File::create(out_name)?;
             out_file.write_all(asm_program.as_bytes())?;
         }
-        "-e" => {
+        "-e" | "-te" => {
+            // JIT execution
             let input_str = if args.len() > 3 { &args[3] } else { "false" };
             let input = parse_input(input_str);
             
@@ -116,13 +154,13 @@ extern _snek_print
             let mut __fun_ctx__ = FunContext::new(&prog.defns);
             let mut __label_map__ = std::collections::HashMap::new();
             
-            // Compile ONLY the function definitions and error handlers
+            // Compile function definitions and error handlers
             compile_functions_only(&prog, &mut __ops__, &mut HashMap::new(), &mut __fun_ctx__, &mut __label_map__);
             
-            // NOW capture the offset - this is where main starts
+            // Capture the offset - this is where main starts
             let start = __ops__.offset();
             
-            // Set up heap pointer AFTER capturing start
+            // Set up heap pointer
             dynasm!(__ops__
                 ; .arch x64
                 ; push rbp
@@ -186,13 +224,14 @@ extern _snek_print
             );
             
             let buf = __ops__.finalize().unwrap();
+            
             let jitted_fn: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(buf.ptr(start)) };
             let result_val = jitted_fn(input);
             
             std::mem::forget(heap);
             print_result(result_val);
         }
-        "-g" => {
+        "-g" | "-tg" => {
             // Both: JIT execution and AOT compilation
             let input_str = if args.len() > 3 { &args[3] } else { "false" };
             let input = parse_input(input_str);
@@ -205,7 +244,7 @@ extern _snek_print
             let mut __fun_ctx__ = FunContext::new(&prog.defns);
             let mut __label_map__ = std::collections::HashMap::new();
             
-            // Compile ONLY the function definitions and error handlers
+            // Compile function definitions and error handlers
             compile_functions_only(&prog, &mut __ops__, &mut HashMap::new(), &mut __fun_ctx__, &mut __label_map__);
             
             // Capture the offset - this is where main starts
@@ -293,11 +332,8 @@ extern _snek_print
             );
             println!("{}", asm_program);
         }
-
-
         _ => {
             eprintln!("Error: Unknown flag '{}'", flag);
-            eprintln!("Usage: {} <-c|-e|-g> <input.cobra> [arg]", args[0]);
             std::process::exit(1);
         }
     }

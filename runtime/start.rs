@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 // #[link(name = "our_code")]
 // extern "C" {
 //     // The \x01 here is an undocumented feature of LLVM (which Rust uses) that ensures
@@ -25,16 +27,34 @@ extern "C" {
     fn our_code_starts_here(input: i64) -> i64;
 }
 
+// #[export_name = "\x01snek_error"]
+// pub extern "C" fn snek_error(errcode: i64) {
+//     if errcode == 1 {
+//         eprintln!("overflow");
+//     } else if errcode == 2 {
+//         eprintln!("invalid argument");
+//     } else {
+//         eprintln!("error code: {}", errcode);
+//     }
+//     std::process::exit(1);
+// }
+
+pub static REPL: AtomicBool = AtomicBool::new(false);
+
 #[export_name = "\x01snek_error"]
 pub extern "C" fn snek_error(errcode: i64) {
-    if errcode == 1 {
-        eprintln!("overflow");
-    } else if errcode == 2 {
-        eprintln!("invalid argument");
-    } else {
-        eprintln!("error code: {}", errcode);
+    match errcode {
+        1 => eprintln!("overflow"),
+        2 => eprintln!("invalid argument"),
+        3 => eprintln!("bad cast"),
+        _ => eprintln!("unknown error code: {}", errcode),
     }
-    std::process::exit(1);
+    if REPL.load(Ordering::SeqCst) {
+        panic!("Runtime error");
+    } 
+    else {
+        std::process::exit(1);
+    }
 }
 
 #[export_name = "snek_print"]
@@ -98,8 +118,9 @@ fn main() {
     
     let input = if args.len() > 1 {
         parse_input(&args[1])
-    } else {
-        FALSE_VAL  // Default input is false
+    } 
+    else {
+        FALSE_VAL 
     };
     
     let result: i64 = unsafe { our_code_starts_here(input) };

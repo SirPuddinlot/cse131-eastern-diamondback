@@ -35,13 +35,15 @@ pub enum Expr {
     Loop(Box<Expr>),    
     Break(Box<Expr>),  
     Call(String, Vec<Expr>),  
+    Cast(Box<Expr>, Type),
 }
 
 #[derive(Debug)]
 pub enum ReplEntry {
     Expr(Expr),
     Define(String, Box<Expr>),
-    Fun(String, Vec<String>, Expr), // Add this variant for function definitions
+    Fun(String, Vec<String>, Expr, Option<Vec<Type>>, Option<Type>), 
+    FunDefn(FunDefn),
 }
 
 
@@ -57,4 +59,15 @@ pub struct FunDefn {
     pub name: String,
     pub params: Vec<String>,
     pub body: Box<Expr>,
+    pub param_types: Option<Vec<Type>>, 
+    pub return_type: Option<Type>, 
+}
+
+//eastern
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    Num,
+    Bool,
+    Any,
+    Nothing,
 }

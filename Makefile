@@ -9,6 +9,12 @@ test/%.all: test/%.snek src/main.rs runtime/start.rs
 test/%.s: test/%.snek src/main.rs
 	cargo run --target x86_64-apple-darwin -- -c $< test/$*.s
 
+test/%.ts: test/%.snek src/main.rs
+	cargo run --target x86_64-apple-darwin -- -tc $< test/$*.s
+
+test/%.t: test/%.snek src/main.rs
+	cargo run --target x86_64-apple-darwin -- -t $< test/$*.s
+
 # Compile .s to executable
 test/%.run: test/%.s runtime/start.rs
 	nasm -f macho64 test/$*.s -o runtime/our_code.o
@@ -18,6 +24,9 @@ test/%.run: test/%.s runtime/start.rs
 # JIT execute only (no assembly file generated)
 test/%.jit: test/%.snek src/main.rs
 	cargo run --target x86_64-apple-darwin -- -e test/$*.snek $(filter-out $@,$(MAKECMDGOALS))
+
+test/%.jitt: test/%.snek src/main.rs
+	cargo run --target x86_64-apple-darwin -- -te test/$*.snek $(filter-out $@,$(MAKECMDGOALS))
 
 # Both JIT execute and generate assembly (debugging)
 test/%.debug: test/%.snek src/main.rs
@@ -29,6 +38,9 @@ clean:
 # JIT execute only (no assembly file generated)
 repl: 
 	cargo run --target x86_64-apple-darwin -- -i 
+
+replt: 
+	cargo run --target x86_64-apple-darwin -- -ti 
 
 # Convenience targets
 .PHONY: clean repl

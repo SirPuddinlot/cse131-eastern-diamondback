@@ -9,8 +9,21 @@ pub fn is_keyword(s: &str) -> bool {
         "let" | "add1" | "sub1" | "isnum" | "isbool" | 
         "+" | "-" | "*" | "<" | ">" | ">=" | "<=" | "=" |
         "if" | "block" | "loop" | "break" | "set!" | 
-        "true" | "false" | "input" | "define"
+        "true" | "false" | "input" | "define" | "fun" | "print"
     )
+}
+
+pub fn parse_type(s: &Sexp) -> Type {
+    match s {
+        Sexp::Atom(S(t)) => match t.as_str() {
+            "Num" => Type::Num,
+            "Bool" => Type::Bool,
+            "Any" => Type::Any,
+            "Nothing" => Type::Nothing,
+            _ => panic!("Invalid type: {}", t),
+        },
+        _ => panic!("Invalid type"),
+    }
 }
 
 pub fn parse_bind(s: &Sexp) -> (String, Expr) {
@@ -47,9 +60,6 @@ pub fn parse_expr(s: &Sexp) -> Expr {
         Sexp::Atom(S(name)) => {
             // reserved words
             match name.as_str() {
-                // "let" | "add1" | "sub1" | "+" | "-" | "*" | "define" => {
-                //     panic!("used reserved word {}", name)
-                // }
                 "true" => Expr::Boolean(true),
                 "false" => Expr::Boolean(false),
                 "input" => Expr::Input,
@@ -131,10 +141,29 @@ pub fn parse_expr(s: &Sexp) -> Expr {
                             Sexp::List(list) => list,
                             _ => panic!("let bindings must be a list"),
                         };
+                        
                         let mut bindings = Vec::new();
-                        for binding_sexp in bindings_list {
-                            bindings.push(parse_bind(binding_sexp));
+                        
+                        // Check if it's a single binding (x expr) or multiple bindings ((x expr) (y expr))
+                        if bindings_list.len() == 2 {
+                            // Could be either (let (x 1) body) or (let ((x 1)) body)
+                            // Check if first element is an atom (single binding) or list (multiple bindings)
+                            if let Sexp::Atom(S(_)) = &bindings_list[0] {
+                                // Single binding without extra parens: (let (x 1) body)
+                                bindings.push(parse_bind(&vec[1]));
+                            } else {
+                                // Multiple bindings: (let ((x 1) (y 2)) body)
+                                for binding_sexp in bindings_list {
+                                    bindings.push(parse_bind(binding_sexp));
+                                }
+                            }
+                        } else {
+                            // Multiple bindings: (let ((x 1) (y 2) (z 3)) body)
+                            for binding_sexp in bindings_list {
+                                bindings.push(parse_bind(binding_sexp));
+                            }
                         }
+                        
                         if bindings.is_empty() {
                             panic!("let requires at least one binding");
                         }
@@ -196,6 +225,14 @@ pub fn parse_expr(s: &Sexp) -> Expr {
                         }
                         Expr::UnOp(Op1::Print, Box::new(parse_expr(&vec[1])))
                     }
+                    "cast" => {
+                        if vec.len() != 3 {
+                            panic!("Invalid: cast takes exactly two arguments");
+                        }
+                        let typ = parse_type(&vec[1]);
+                        let expr = parse_expr(&vec[2]);
+                        Expr::Cast(Box::new(expr), typ)
+                    }
                     // At the end of parse_expr's Sexp::List match, before the final _ => panic!
                     _ => {
                         // Try to parse as function call
@@ -221,30 +258,41 @@ pub fn parse_expr(s: &Sexp) -> Expr {
         }
     }
 }
-
 pub fn parse_repl_entry(s: &Sexp, depth: usize) -> Result<ReplEntry, String> {
     match s {
         Sexp::List(vec) if !vec.is_empty() => {
             if let Sexp::Atom(S(op)) = &vec[0] {
-                if op == "define" {
-                    if depth > 0 {
-                        return Err("Invalid".to_string());
+                match op.as_str() {
+                    "define" => {
+                        if depth > 0 {
+                            return Err("Invalid".to_string());
+                        }
+                        if vec.len() != 3 {
+                            return Err("Invalid: define takes exactly two arguments".to_string());
+                        }
+                        let name = match &vec[1] {
+                            Sexp::Atom(S(s)) => s.clone(),
+                            _ => return Err("Invalid: define name must be identifier".to_string()),
+                        };
+                        let expr = parse_expr(&vec[2]);
+                        return Ok(ReplEntry::Define(name, Box::new(expr)));
                     }
-                    if vec.len() != 3 {
-                        return Err("Invalid: define takes exactly two arguments".to_string());
+                    "fun" => {
+                        if depth > 0 {
+                            return Err("Invalid".to_string());
+                        }
+                        // Just parse it as a FunDefn and wrap it
+                        let defn = parse_defn(s);
+                        return Ok(ReplEntry::FunDefn(defn));
                     }
-                    let name = match &vec[1] {
-                        Sexp::Atom(S(s)) => s.clone(),
-                        _ => return Err("Invalid: define name must be identifier".to_string()),
-                    };
-                    let expr = parse_expr(&vec[2]);
-                    return Ok(ReplEntry::Define(name, Box::new(expr)));
+                    _ => {} // Not a special form, fall through to expression
                 }
             }
         }
         _ => {}
     }
     
+    // If we get here, it's a regular expression
     Ok(ReplEntry::Expr(parse_expr(s)))
 }
 
@@ -252,7 +300,6 @@ pub fn parse_repl_entry(s: &Sexp, depth: usize) -> Result<ReplEntry, String> {
 // diamondback stuff
 
 pub fn parse_program(s: &Sexp) -> Program {
-    // Wrap in parens if not already a list (for compatibility)
     let list = match s {
         Sexp::List(vec) => vec,
         _ => panic!("Program must be a list of definitions and expression"),
@@ -284,7 +331,7 @@ pub fn parse_program(s: &Sexp) -> Program {
 fn parse_defn(s: &Sexp) -> FunDefn {
     match s {
         Sexp::List(vec) => {
-            if vec.len() != 3 {
+            if vec.len() != 3 && vec.len() != 5 {
                 panic!("Invalid function definition");
             }
             
@@ -295,7 +342,7 @@ fn parse_defn(s: &Sexp) -> FunDefn {
             }
             
             // Parse (name param1 param2 ...)
-            let (name, params) = match &vec[1] {
+            let (name, params, param_types) = match &vec[1] {
                 Sexp::List(sig) => {
                     if sig.is_empty() {
                         panic!("Function signature cannot be empty");
@@ -307,8 +354,31 @@ fn parse_defn(s: &Sexp) -> FunDefn {
                     
                     let mut params = Vec::new();
                     let mut seen = HashMap::new();
+                    let mut param_types = Vec::new();
+                    let mut has_types = false;
+
                     for param in &sig[1..] {
                         match param {
+                            Sexp::List(p_vec) if p_vec.len() == 3 => {
+                                if let (Sexp::Atom(S(p)), Sexp::Atom(S(colon)), typ) = 
+                                    (&p_vec[0], &p_vec[1], &p_vec[2]) {
+                                    if colon != ":" {
+                                        panic!("Expected ':'");
+                                    }
+                                    if is_keyword(p) {
+                                        panic!("keyword");
+                                    }
+                                    if seen.contains_key(p) {
+                                        panic!("Duplicate binding");
+                                    }
+                                    seen = seen.update(p.clone(), ());
+                                    params.push(p.clone());
+                                    param_types.push(parse_type(typ));
+                                    has_types = true;
+                                } else {
+                                    panic!("Invalid parameter annotation");
+                                }
+                            }
                             Sexp::Atom(S(p)) => {
                                 if is_keyword(p) {
                                     panic!("keyword");
@@ -322,17 +392,50 @@ fn parse_defn(s: &Sexp) -> FunDefn {
                             _ => panic!("Parameter must be identifier"),
                         }
                     }
-                    (name, params)
+                    let types = if has_types { Some(param_types) } else { None };
+                    (name, params, types)
                 }
                 _ => panic!("Invalid function signature"),
             };
+
+            let (body_sexp, return_type) = if vec.len() == 5 {
+                // Flat syntax: (fun (name params...) -> Type body)
+                if let Sexp::Atom(S(arrow)) = &vec[2] {
+                    if arrow == "->" {
+                        (&vec[4], Some(parse_type(&vec[3])))
+                    } else {
+                        panic!("Expected '->' in function definition");
+                    }
+                } else {
+                    panic!("Expected '->' in function definition");
+                }
+            } else {
+                // Old nested syntax or no annotation: (fun (name params...) body)
+                match &vec[2] {
+                    Sexp::List(body_list) if body_list.len() == 3 => {
+                        if let (Sexp::Atom(S(arrow)), typ, body) = 
+                            (&body_list[0], &body_list[1], &body_list[2]) {
+                            if arrow == "->" {
+                                (body, Some(parse_type(typ)))
+                            } else {
+                                (&vec[2], None)
+                            }
+                        } else {
+                            (&vec[2], None)
+                        }
+                    }
+                    _ => (&vec[2], None)
+                }
+            };
             
-            let body = parse_expr(&vec[2]);
+            let body = parse_expr(body_sexp);
             
             FunDefn {
                 name,
                 params,
                 body: Box::new(body),
+                param_types,
+                return_type,
             }
         }
         _ => panic!("Function definition must be a list"),

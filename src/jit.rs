@@ -24,9 +24,11 @@ pub fn compile_functions_only(
     let snek_print = ops.new_dynamic_label();
     let error_overflow = ops.new_dynamic_label();
     let error_invalid_arg = ops.new_dynamic_label();
+    let error_bad_cast = ops.new_dynamic_label();
     label_map.insert("_snek_print".to_string(), snek_print);
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
+    label_map.insert("error_bad_cast".to_string(), error_bad_cast);
     
     // Compile all function definitions with stack-based calling convention
     for defn in &program.defns {
@@ -135,6 +137,11 @@ pub fn compile_functions_only(
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
         ; ret
+        ; =>error_bad_cast
+        ; mov rdi, 3
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; ret
     );
 }
 
@@ -156,10 +163,11 @@ pub fn compile_to_jit(
     let snek_print = ops.new_dynamic_label();
     let error_overflow = ops.new_dynamic_label();
     let error_invalid_arg = ops.new_dynamic_label();
+    let error_bad_cast = ops.new_dynamic_label();
     label_map.insert("_snek_print".to_string(), snek_print);
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
-    
+    label_map.insert("error_bad_cast".to_string(), error_bad_cast);
     // Compile all function definitions with stack-based calling convention
     for defn in &program.defns {
        //println!("Function {} body type: {}", defn.name, std::any::type_name_of_val(&defn.body));
@@ -347,18 +355,12 @@ pub fn compile_to_jit(
         ; mov rax, QWORD snek_error_addr as _
         ; call rax
         ; ret
+        ; =>error_bad_cast
+        ; mov rdi, 3
+        ; mov rax, QWORD snek_error_addr as _
+        ; call rax
+        ; ret
     );
-
-    // println!("Label map contents:");
-    // for (name, _) in &label_map {
-    //     println!("  {}", name);
-    // }
-
-    // for instr in &instrs {
-    //     if let Instr::ICall(target) = instr {
-    //         println!("Call to: {}, exists: {}", target, label_map.contains_key(target));
-    //     }
-    // }
 }
 
 pub fn instr_to_dynasm(instr: &Instr, ops: &mut Assembler, label_map: &StdHashMap<String, dynasmrt::DynamicLabel>) {

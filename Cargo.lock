@@ -54,17 +54,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diamondback"
-version = "0.1.0"
-dependencies = [
- "capstone",
- "dynasm",
- "dynasmrt",
- "im",
- "sexp",
-]
-
-[[package]]
 name = "dynasm"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -89,6 +78,17 @@ dependencies = [
  "dynasm",
  "fnv",
  "memmap2",
+]
+
+[[package]]
+name = "ediamondback"
+version = "0.1.0"
+dependencies = [
+ "capstone",
+ "dynasm",
+ "dynasmrt",
+ "im",
+ "sexp",
 ]
 
 [[package]]

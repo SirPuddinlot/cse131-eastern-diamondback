@@ -329,6 +329,29 @@ pub fn compile_to_instrs(
                 code.push(Instr::IAdd(Val::Reg(Reg::RSP), Val::Imm(8)));
             }
         }
+        Expr::Cast(expr, target_type) => {
+            let (mut expr_code, expr_min) = compile_to_instrs(expr, si, env, defines, fun_ctx, input, loop_end);
+            current_min = current_min.min(expr_min);
+            code.append(&mut expr_code);
+            
+            // Runtime type check for cast
+            match target_type {
+                Type::Num => {
+                    code.push(Instr::ITest(Val::Reg(Reg::RAX), Val::Imm(1)));
+                    code.push(Instr::IJne("error_bad_cast".to_string()));
+                }
+                Type::Bool => {
+                    code.push(Instr::ITest(Val::Reg(Reg::RAX), Val::Imm(1)));
+                    code.push(Instr::IJe("error_bad_cast".to_string()));
+                }
+                Type::Nothing => {
+                    code.push(Instr::IJmp("error_bad_cast".to_string()));
+                }
+                Type::Any => {
+                    // No check needed
+                }
+            }
+        }
     }
 
     (code, current_min)
@@ -393,6 +416,11 @@ pub fn compile(program: &Program) -> String {
     
     asm_code.push_str("\nerror_invalid_argument:\n");
     asm_code.push_str("  mov rdi, 2\n");
+    asm_code.push_str("  call snek_error\n");
+    asm_code.push_str("  ret\n");
+
+    asm_code.push_str("\nerror_bad_cast:\n");
+    asm_code.push_str("  mov rdi, 3\n");
     asm_code.push_str("  call snek_error\n");
     asm_code.push_str("  ret\n");
     
