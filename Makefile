@@ -41,7 +41,7 @@ test/%.debug: test/%.snek src/main.rs
 	cargo run --target x86_64-apple-darwin -- -g $< test/$*.s $(filter-out $@,$(MAKECMDGOALS))
 
 test/%.debugt: test/%.snek src/main.rs
-	cargo run --target x86_64-apple-darwin -- -g $< test/$*.s $(filter-out $@,$(MAKECMDGOALS))
+	cargo run --target x86_64-apple-darwin -- -tg $< test/$*.s $(filter-out $@,$(MAKECMDGOALS))
 
 clean:
 	rm -f test/*.s test/*.run runtime/*.o runtime/*.a

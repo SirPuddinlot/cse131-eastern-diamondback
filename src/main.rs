@@ -90,28 +90,27 @@ fn main() -> std::io::Result<()> {
     let typecheck_mode = flag.starts_with("-t");
     
     if typecheck_mode {
-        if typecheck_mode {
-            let input_type = match flag.as_str() {
-                "-t" | "-tc" => {
-                    // No input provided, input has type Any
-                    None
-                }
-                "-te" => {
-                    // For -te: input is at args[3]
-                    let input_str = if args.len() > 3 { &args[3] } else { "false" };
-                    let input = parse_input(input_str);
-                    Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
-                }
-                "-tg" => {
-                    // For -tg: format is -tg <prog>.snek <prog>.s <input>
-                    // So input is at args[4]
-                    let input_str = if args.len() > 4 { &args[4] } else { "false" };
-                    let input = parse_input(input_str);
-                    Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
-                }
-                _ => None
-            };
-        
+        let input_type = match flag.as_str() {
+            "-t" | "-tc" => {
+                // No input provided, input has type Any
+                None
+            }
+            "-te" => {
+                // For -te: input is at args[3]
+                let input_str = if args.len() > 3 { &args[3] } else { "false" };
+                let input = parse_input(input_str);
+                Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
+            }
+            "-tg" => {
+                // For -tg: format is -tg <prog>.snek <prog>.s <input>
+                // So input is at args[4]
+                let input_str = if args.len() > 4 { &args[4] } else { "false" };
+                let input = parse_input(input_str);
+                Some(if input & 1 == 0 { Type::Num } else { Type::Bool })
+            }
+            _ => None
+        };
+    
         // Run typechecker
         match typecheck_program(&prog, input_type) {
             Ok(t) => {
@@ -127,7 +126,6 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
         }
-       }
     }
     
     match flag.as_str() {
@@ -338,6 +336,24 @@ extern _snek_print
 
             println!("JIT Result: ");
             print_result(result_val);
+
+            fn disassemble(buf: &[u8]) {
+                let cs = Capstone::new()
+                    .x86()
+                    .mode(capstone::arch::x86::ArchMode::Mode64)
+                    .build()
+                    .unwrap();
+            
+                let insns = cs.disasm_all(buf, 0x1000).unwrap();
+                print!("\n=== JIT Disassembly ===\n");
+                for i in insns.iter() {
+                    println!("0x{:x}: {}\t{}",
+                        i.address(),
+                        i.mnemonic().unwrap_or(""),
+                        i.op_str().unwrap_or(""));
+                }
+            }
+            disassemble(&buf);
 
             // === AOT COMPILATION OUTPUT ===
             let result = compile(&prog);
