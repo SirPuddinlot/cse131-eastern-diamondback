@@ -1,4 +1,4 @@
-(
+
 (fun (isodd n)
   (if (< n 0)
       (isodd (- 0 n))
@@ -21,4 +21,3 @@
   (print (iseven input))
 )
 
-)

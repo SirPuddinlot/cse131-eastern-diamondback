@@ -57,7 +57,7 @@ pub extern "C" fn snek_error(errcode: i64) {
     }
 }
 
-#[export_name = "snek_print"]
+#[export_name = "\x01snek_print"]
 pub extern "C" fn snek_print(val: i64) -> i64 {
     // Print the value and return it
     println!("{}", if val & 1 == 0 {

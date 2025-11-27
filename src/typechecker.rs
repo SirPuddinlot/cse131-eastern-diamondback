@@ -25,8 +25,9 @@ impl Type {
 
 pub fn typecheck_program(program: &Program, input_type: Option<Type>) -> Result<Type, String> {
     // Check all function definitions
+    let empty_defines = HashMap::new();
     for defn in &program.defns {
-        typecheck_defn(defn, &program.defns)?;
+        typecheck_defn(defn, &program.defns, &empty_defines)?;
     }
     
     // Check main expression
@@ -41,8 +42,9 @@ pub fn typecheck_program(program: &Program, input_type: Option<Type>) -> Result<
 }
 
 // Make these functions public for REPL
-pub fn typecheck_defn(defn: &FunDefn, all_defns: &[FunDefn]) -> Result<(), String> {
-    let mut env = HashMap::new();
+pub fn typecheck_defn(defn: &FunDefn, all_defns: &[FunDefn], define_env: &HashMap<String, Type>) -> Result<(), String> {
+
+    let mut env = define_env.clone();
     
     // Build environment from parameters
     if let Some(ref param_types) = defn.param_types {

@@ -129,7 +129,7 @@ pub fn compile_to_instrs(
                 Op1::Print => {
                     code.push(Instr::IPush(Val::Reg(Reg::RAX)));
                     code.push(Instr::IMov(Val::Reg(Reg::RDI), Val::Reg(Reg::RAX)));
-                    code.push(Instr::ICall("_snek_print".to_string()));
+                    code.push(Instr::ICall("snek_print".to_string()));
                     code.push(Instr::IPop(Val::Reg(Reg::RAX)));
                 }
             }

@@ -86,6 +86,8 @@ fn main() -> std::io::Result<()> {
 
     let prog = parse_program(&sexp);
 
+    let mut defines: HashMap<String, Type> = HashMap::new();
+
     // Determine if we're in typecheck mode and get input type if needed
     let typecheck_mode = flag.starts_with("-t");
     
@@ -141,7 +143,7 @@ fn main() -> std::io::Result<()> {
                 "section .text
 global our_code_starts_here
 extern snek_error
-extern _snek_print
+extern snek_print
 
 {}",
                 result
@@ -336,7 +338,8 @@ extern _snek_print
 
             println!("JIT Result: ");
             print_result(result_val);
-
+            
+            // Disassemble JITed code from capstone
             fn disassemble(buf: &[u8]) {
                 let cs = Capstone::new()
                     .x86()
@@ -361,7 +364,7 @@ extern _snek_print
                 "section .text
 global our_code_starts_here
 extern snek_error
-extern _snek_print
+extern snek_print
 
 {}",
                 result

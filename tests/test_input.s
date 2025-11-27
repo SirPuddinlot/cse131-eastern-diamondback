@@ -8,8 +8,6 @@ our_code_starts_here:
   mov rbp, rsp
   mov [r15 + 0], rdi
   mov rax, [r15 + 0]
-  test rax, 1
-  jne error_bad_cast
   mov rsp, rbp
   pop rbp
   ret

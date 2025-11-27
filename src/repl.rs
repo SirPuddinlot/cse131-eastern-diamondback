@@ -44,7 +44,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
     let error_overflow = ops.new_dynamic_label();
     let error_invalid_arg = ops.new_dynamic_label();
     let error_bad_cast = ops.new_dynamic_label();
-    label_map.insert("_snek_print".to_string(), snek_print);
+    label_map.insert("snek_print".to_string(), snek_print);
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);
@@ -115,10 +115,10 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 
                 // Typecheck if enabled
                 if typecheck {
-                    match typecheck_defn(&defn, &functions) {
+                    match typecheck_defn(&defn, &functions, &define_types) {
                         Ok(_) => {}
                         Err(e) => {
-                            println!("{}", e);
+                            println!("line 121 {}", e);
                             continue;
                         }
                     }
@@ -257,10 +257,10 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                 
                 // Typecheck if enabled
                 if typecheck {
-                    match typecheck_defn(&defn, &functions) {
+                    match typecheck_defn(&defn, &functions, &define_types) {
                         Ok(_) => {}
                         Err(e) => {
-                            println!("{}", e);
+                            println!("line 263 {}", e);
                             continue;
                         }
                     }
@@ -389,7 +389,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                             define_types = define_types.update(name.clone(), t);
                         }
                         Err(e) => {
-                            println!("{}", e);
+                            println!("line 392 {}", e);
                             continue;
                         }
                     }
@@ -480,7 +480,7 @@ pub fn run_repl(typecheck: bool) -> io::Result<()> {
                     match typecheck_expr(&expr, &type_env, &functions) {
                         Ok(_t) => {}
                         Err(e) => {
-                            println!("{}", e);
+                            println!("line 483 {}", e);
                             continue;
                         }
                     }

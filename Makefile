@@ -48,10 +48,10 @@ clean:
 
 # JIT execute only (no assembly file generated)
 repl: 
-	cargo run --target x86_64-apple-darwin -- -i 
+	rlwrap cargo run --target x86_64-apple-darwin -- -i 
 
 replt: 
-	cargo run --target x86_64-apple-darwin -- -ti 
+	rlwrap cargo run --target x86_64-apple-darwin -- -ti 
 
 # Convenience targets
 .PHONY: clean repl

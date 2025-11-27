@@ -15,9 +15,9 @@ pub fn compile_error_handlers(
     label_map: &StdHashMap<String, dynasmrt::DynamicLabel>,
 ) {
     let snek_error_addr = crate::helpers::snek_error as *const () as i64;
-    let snek_print_addr = crate::helpers::_snek_print as *const () as i64;
+    let snek_print_addr = crate::helpers::snek_print as *const () as i64;
     
-    let snek_print = label_map["_snek_print"];
+    let snek_print = label_map["snek_print"];
     let error_overflow = label_map["error_overflow"];
     let error_invalid_arg = label_map["error_invalid_argument"];
     let error_bad_cast = label_map["error_bad_cast"];
@@ -84,7 +84,7 @@ pub fn compile_functions_only(
     let error_overflow = ops.new_dynamic_label();
     let error_invalid_arg = ops.new_dynamic_label();
     let error_bad_cast = ops.new_dynamic_label();
-    label_map.insert("_snek_print".to_string(), snek_print);
+    label_map.insert("snek_print".to_string(), snek_print);
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);
@@ -176,7 +176,7 @@ pub fn compile_to_jit(
     let error_overflow = ops.new_dynamic_label();
     let error_invalid_arg = ops.new_dynamic_label();
     let error_bad_cast = ops.new_dynamic_label();
-    label_map.insert("_snek_print".to_string(), snek_print);
+    label_map.insert("snek_print".to_string(), snek_print);
     label_map.insert("error_overflow".to_string(), error_overflow);
     label_map.insert("error_invalid_argument".to_string(), error_invalid_arg);
     label_map.insert("error_bad_cast".to_string(), error_bad_cast);

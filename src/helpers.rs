@@ -46,31 +46,22 @@ pub fn print_result(val: i64) {
 
 #[export_name = "\x01snek_error"]
 pub extern "C" fn snek_error(errcode: i64) {
-    // Use catch_unwind to handle panics at the FFI boundary
-    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        // Store error information
-        ERROR_CODE.store(errcode, Ordering::SeqCst);
-        HAS_ERROR.store(true, Ordering::SeqCst);
-        
-        if !REPL.load(Ordering::SeqCst) {
-            // Only exit in non-REPL mode
-            match errcode {
-                1 => eprintln!("overflow"),
-                2 => eprintln!("invalid argument"),
-                3 => eprintln!("bad cast"),
-                _ => eprintln!("unknown error code: {}", errcode),
-            }
-            std::process::exit(1);
+    ERROR_CODE.store(errcode, Ordering::SeqCst);
+    HAS_ERROR.store(true, Ordering::SeqCst);
+    if !REPL.load(Ordering::SeqCst) {
+        match errcode {
+            1 => eprintln!("overflow"),
+            2 => eprintln!("invalid argument"),
+            3 => eprintln!("bad cast"),
+            _ => eprintln!("unknown error code: {}", errcode),
         }
-        
-        // In REPL mode, panic to unwind back to the REPL loop
-        // This panic will be caught by catch_unwind, preventing it from crossing FFI
-        panic!("Runtime error in REPL");
-    }));
+        std::process::exit(1);
+    }
+    println!("Runtime error in REPL check for code review here in helpers.rs:snek_error");
 }
 
-#[export_name = "_snek_print"]
-pub extern "C" fn _snek_print(val: i64) -> i64 {
+#[export_name = "\x01snek_print"]
+pub extern "C" fn snek_print(val: i64) -> i64 {
     println!("{}", if val & 1 == 0 {
         format!("{}", val >> 1)
     } else if val == 1 {
